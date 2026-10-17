@@ -1,0 +1,12 @@
+name: prompt-insights
+version: 1.0.0
+description: Analyze your Claude Code session history and get a tabbed HTML report with a quick win, prompting techniques (RPI and more), stale agent-file checks and model-routing advice.
+author: mcyrrer
+license: MIT
+type: skill
+targets:
+  - claude
+includes: auto
+dependencies:
+  apm: []
+  mcp: []

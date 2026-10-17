@@ -1,0 +1,10 @@
+# Output of the skill when it is run inside this repo (reports contain redacted session quotes)
+/prompt-insights/
+# Python
+__pycache__/
+*.pyc
+# APM consumer artifacts if the repo is used as a test project
+apm_modules/
+apm.lock.yaml
+.claude/
+.agents/

@@ -1,0 +1,179 @@
+---
+name: prompt-insights
+description: Use when the user wants to analyze their past Claude Code sessions in ~/.claude/projects: how to write better prompts, which prompting techniques (RPI research-plan-implement, plan mode, staged delivery) would help, whether agent files (CLAUDE.md, AGENTS.md, rules, skills, commands, subagents) are stale, and whether the right model is used for each task type. Produces a self-contained offline HTML report with tabs, light and dark mode and a quick win at the top. Trigger on requests to review their Claude Code history, improve their prompting, give prompt engineering feedback, check for stale CLAUDE.md, rules or skills, find repeated corrections, choose between Opus, Sonnet and Haiku, or "prompt insights", even if no HTML report is requested.
+---
+
+# Prompt insights
+
+Turn the user's Claude Code session history into an actionable, tabbed HTML report about four things:
+prompt quality, prompting techniques that fit their habits, agent file maintenance, and model
+choice per task type. The first tab opens with a **quick win** the user can apply in five minutes.
+
+Scripts do the mechanical work (parsing, counting, redaction, HTML). You do the judgment
+(is this a real correction, is this rule stale, what would a better prompt look like, which
+technique fits). Never read raw `.jsonl` files directly: they are large and may contain secrets.
+Work from `summary.json` and `--show`.
+
+## Where files go
+
+Everything the skill writes lands in **`prompt-insights/`** inside the directory the agent runs from
+(the user's project folder). The scripts create it, put a `.gitignore` inside it, and add
+`prompt-insights/` to the enclosing git repository's `.gitignore`, because reports contain redacted
+quotes from the user's sessions and must never be committed. Do not pass `--out` unless the user
+asks for another location.
+
+`SKILL_DIR` below is the folder holding this SKILL.md (for example `.claude/skills/prompt-insights`
+or `~/.claude/skills/prompt-insights`). Run the commands from the user's project folder with the
+full path to the scripts, so that `./prompt-insights/` is created in the right place.
+
+## Safety rules
+
+- Read-only on `~/.claude` and on all repos. The only files you create are in `./prompt-insights/`
+  (and the one-line `.gitignore` entry described above).
+- Redaction happens in the scripts. Still never quote secrets, tokens, internal hostnames or
+  customer names. If the user names internal terms to hide, pass them with `--extra-redact REGEX`.
+- Python 3.9+ standard library only; nothing to install.
+
+## Workflow
+
+1. **Check the format.** Session files are not a stable public contract.
+   ```
+   python3 SKILL_DIR/scripts/analyze_sessions.py --schema
+   ```
+   If it reports missing expected fields, stop and tell the user what changed instead of
+   continuing with zeros. Pass the same `--project` / `--since-days` filters you will use in step 2;
+   without them it inspects the newest sessions of any project.
+
+2. **Build the summary.** Defaults to the 20 most recent sessions.
+   ```
+   python3 SKILL_DIR/scripts/analyze_sessions.py --limit 20
+   ```
+   This writes `prompt-insights/summary.json` and `prompt-insights/labels.todo.json`.
+   Flags: `--project TEXT` (one project; also narrows the agent-file inventory to that project),
+   `--since-days N`, `--limit 0` (all; `--limit` counts sessions kept after exclusions),
+   `--exclude-session ID` (repeatable: use it for earlier look-alike analysis runs that did not
+   invoke this skill and would add noise), `--prices prices.json` (optional cost estimate),
+   `--extra-redact REGEX` (repeatable), `--labels labels.json`. Print the console digest to the
+   user and tell them to skim `summary.json` for leaked secrets before sharing.
+
+   What the parser counts as a typed prompt: only human input. Task notifications, messages from
+   other sessions and injected reminders are excluded (`aggregates.automated_turns_excluded`),
+   sessions that ran this skill are left out (so a re-run does not analyse itself; `--include-self`
+   keeps them), and the arguments of a skill slash command such as `/my-skill <text>` count, because
+   that text is what the user typed. So turn counts and friction are about the user, not the machinery.
+
+3. **Fix the task labels (do not skip).** Task types are guessed from keywords and are often wrong
+   (a feature build tagged "review", a chore tagged "feature"), which poisons the model/task matrix.
+   Read each session's `first_prompt` in `summary.json`, correct the values in
+   `prompt-insights/labels.todo.json`, save it as `prompt-insights/labels.json`, and re-run step 2
+   with `--labels prompt-insights/labels.json`. The warning about heuristic labels disappears and the
+   Overview tab says "task labels reviewed".
+
+   Label by what the user wanted, not by how it was built: a feature delivered by a multi-agent
+   workflow is "feature". Label by what the session turned out to be: `first_prompt` is the
+   starting hint, but if the session drifted (a README request that became feature work), use
+   the later `prompts` and the label that describes most of the work. If nothing in the allowed
+   list fits, use "chore" (small mechanical work) or "other".
+
+4. **Read the summary in pieces**: `meta` and `aggregates` first, then `project_roots` and
+   `agent_files`, then individual `sessions`. Use `python3 -c` or `jq` to slice it.
+
+5. **Verify before concluding.** All flags are heuristics. For every correction, mismatch or
+   stale-file claim, read the surrounding turns:
+   ```
+   python3 SKILL_DIR/scripts/analyze_sessions.py --show <session-id-prefix> --turns 2:6
+   ```
+   `--show` uses the same turn numbers as the summary and prints automated entries as
+   `(automated: ...)` lines; it stops at 400 lines, so use `--turns a:b` for long sessions.
+   Drop false positives. Then check the repo on disk:
+   - `project_roots` says whether CLAUDE.md, AGENTS.md, rules and memory notes exist. Memory notes
+     are the user's own saved preferences and often hold the standing rules that are missing from
+     CLAUDE.md: read the ones named in `memory_note_names` (read-only) when judging what is missing.
+   - Open each agent file you plan to criticise before calling it stale, thin or dead. Run `grep` on
+     every `possibly_dead_references` entry first; they are candidates only.
+   - Events in `agent_file_edit_events` with `on_disk: false` were renamed or deleted since the
+     session: report them as such rather than as live files.
+
+6. **Analyze four areas.**
+   - *Prompts:* score the criteria in `references/insights-schema.md`, find the top 5 recurring
+     weaknesses with before/after rewrites, 3 strengths, and a best/worst comparison.
+   - *Techniques:* read `references/prompting-techniques.md`, match the user's weaknesses to
+     1 to 3 techniques (RPI, plan mode, staged delivery, verify loop, ...), and give each an
+     example prompt in the user's own domain.
+   - *Agent files:* use `agent_files`, `project_roots`, `agent_file_edit_events`,
+     `repeated_corrections`, `repeated_instructions` and `skills_never_triggered_in_sample`. A skill
+     the user invokes by slash command is in `skills_invoked_by_slash`, so it is in use even if the
+     Skill tool never ran. A rule that keeps being corrected but never edited is the strongest
+     staleness signal; `repeated_instructions` finds rules restated across sessions even without
+     correction wording. A subagent defined mid-session does not load until restart and workflows
+     may call subagents by other names, so "unused" is a lead, not a verdict.
+     **When any agent file looks stale, bloated, contradictory or full of dead references, or the
+     user's instructions look written for an older model, tell them to run `/doctor prompt-audit`**
+     (or `/doctor prompt-audit <path>` for one file or folder) in Claude Code. It audits CLAUDE.md,
+     AGENTS.md, rules, skills, commands and subagents for outdated or conflicting content and
+     missing references, reports proposed edits, and changes nothing until approved. It needs Claude
+     Code v2.1.283 or later (check `meta.claude_code_versions`). The report shows this hint
+     automatically on the Agent files tab; also put it in the `action_plan` with the file to audit.
+   - *Models:* read `references/model-routing.md`, then judge `by_model`, `task_model_matrix` and
+     `model_mismatch_candidates` (a starting list: also scan short sessions on the strongest tier
+     yourself). Compare within a task type only. Subagent models live in separate transcripts the
+     parser does not read, so `subagent_model_msgs` is empty; say that instead of guessing.
+     If `slash_model_commands` lists a switch but `model_switches` is empty, the switch did not
+     take effect on assistant messages. `model_default_saved` counts sessions where `/model` saved
+     a new default for later sessions, which can change the model of future work silently; tell the user.
+
+7. **Write `prompt-insights/insights.json`** following `references/insights-schema.md`.
+   `assets/example-insights.json` shows the shape; use it for structure only, never copy its text.
+   Must include: a `quick_win`, 1 to 3 `techniques`, 3 to 5 `templates` (goal, context,
+   constraints, approach, done_when), and a prioritized `action_plan`.
+
+   Rules that keep the report honest:
+   - `before` in each weakness is a **verbatim** excerpt copied from `--show` or
+     `sessions[].prompts` (stored prompts are cut at 300 characters, so quote a short passage from
+     a long brief). The report checks it against the transcript and flags what it cannot find.
+     If the problem is behaviour with no prompt (a rule said in chat), use `before_kind: "behavior"`.
+   - Only cite numbers that are in `summary.json`. Do not compare against "your average across all
+     projects" unless the run included them.
+   - Best vs worst: pick sessions of the same task type; otherwise set `comparable: false`.
+   - Action plan items can name trusted sources: `{"text": "...", "sources": ["claude-md", "memory"]}`.
+     The ids are in `references/insights-schema.md`; the report renders them as links to Anthropic's
+     own documentation, and links items that name no source by topic. Never put free-form URLs in.
+
+8. **Build the report.**
+   ```
+   python3 SKILL_DIR/scripts/build_report.py --summary prompt-insights/summary.json \
+       --insights prompt-insights/insights.json
+   ```
+   The result, `prompt-insights/claude-prompt-insights.html`, is one self-contained HTML file with tabs
+   and a theme button that switches between system, light and dark. The builder re-redacts, refuses to
+   write a page that loads external resources (links the reader clicks are fine), and renders charts as
+   inline SVG. (The warning "unrecognised entry types" lists harness bookkeeping lines that carry no
+   prompt data and can be ignored.) Check its output: it prints how many quotes were verified and warns
+   about missing sections. Open the file with `open prompt-insights/claude-prompt-insights.html` on macOS.
+   Tabs: Overview (quick win, headlines, numbers), Prompts (scores, weaknesses, strengths, best vs
+   worst), Techniques, Agent files, Models, Templates, Action plan (with doc links), Method (limits, warnings).
+
+9. **Reply in chat** with the file path and a five-line plain-text summary: the quick win, the
+   biggest prompt weakness, the technique to try, the most important agent-file fix and model-routing
+   headline, and the sample size with its main limit. Keep it short; the report holds the detail.
+
+## Quality bar
+
+- Every claim cites a session id, a file path or a number from `summary.json`.
+- The quick win is concrete and paste-ready, not advice. It is something the user can do today.
+- Separate measured from estimated. If token data or prices are missing, say so; do not invent
+  cost figures or model prices from memory.
+- State the sample limits honestly (20 sessions is a start; say whether a larger sample is worth running).
+- Prefer a few sharp, evidenced findings over a long generic list.
+- Explain the "why" in rewrites so the user learns the principle, not just the fix.
+
+## Files
+
+- `scripts/analyze_sessions.py`: parser and aggregator (`--schema`, `--show`, default analysis).
+- `scripts/build_report.py`: renders the tabbed HTML report from `summary.json` + `insights.json`.
+- `scripts/outdir.py`: creates `prompt-insights/` and keeps it out of git.
+- `scripts/redact.py`: shared redaction rules.
+- `references/insights-schema.md`: the exact `insights.json` shape, writing rules and source ids.
+- `references/prompting-techniques.md`: RPI and other techniques, and how to match them to the data.
+- `references/model-routing.md`: how to judge model fit; read before the model section.
+- `assets/example-insights.json`: structural example only.

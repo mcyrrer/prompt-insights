@@ -1,0 +1,192 @@
+{
+  "_note": "STRUCTURE EXAMPLE ONLY. All content is fictional. Never copy text from here into a real report.",
+  "quick_win": {
+    "title": "Example: end your next prompt with a 'Done when' line",
+    "why": "Example: 4 of 6 first prompts name no check, and 3 sessions needed a follow-up to ask for one.",
+    "do_this": "Done when <command> passes and I can see <result>.",
+    "minutes": 2,
+    "evidence": "Example: s1, s2"
+  },
+  "headline_insights": [
+    "Example: 6 of 20 sessions contain a strong correction, mostly about scope.",
+    "Example: first prompts rarely say how to verify the result."
+  ],
+  "top_change": "Example: end every task prompt with a 'Done when' line naming the command to run.",
+  "prompt_quality": {
+    "scores": [
+      {
+        "criterion": "Goal and why",
+        "score": 3,
+        "note": "example note"
+      },
+      {
+        "criterion": "Scope",
+        "score": 2,
+        "note": "example note"
+      },
+      {
+        "criterion": "Context",
+        "score": 4,
+        "note": "example note"
+      },
+      {
+        "criterion": "Done criteria",
+        "score": 1.5,
+        "note": "example note"
+      },
+      {
+        "criterion": "Plan first",
+        "score": 2,
+        "note": "example note"
+      }
+    ]
+  },
+  "weaknesses": [
+    {
+      "title": "No done criteria",
+      "before": "fix the flaky deploy job",
+      "after": "Fix the flaky deploy job. Done when <lint command> passes and you explain how to verify in CI.",
+      "why": "Gives the agent a way to check its own work.",
+      "evidence_sessions": [
+        "s1"
+      ],
+      "before_kind": "quote"
+    }
+  ],
+  "strengths": [
+    {
+      "title": "Names files",
+      "evidence": "Example: first prompts point to concrete paths."
+    }
+  ],
+  "best_vs_worst": {
+    "best": {
+      "session_id": "s2",
+      "first_prompt": "example",
+      "what_happened": "example",
+      "prompt_traits": [
+        "clear goal"
+      ]
+    },
+    "worst": {
+      "session_id": "s1",
+      "first_prompt": "example",
+      "what_happened": "example",
+      "prompt_traits": [
+        "no scope"
+      ]
+    },
+    "key_difference": "Example: the best session stated what must not change.",
+    "comparable": true
+  },
+  "techniques": [
+    {
+      "id": "staged",
+      "name": "Staged delivery with checkpoints",
+      "when": "Example: a prompt that asks for a whole backlog",
+      "why_for_you": "Example: s1 asked for four features at once and cut two at turn 2.",
+      "steps": [
+        "List the stages",
+        "Ask to stop and report after each",
+        "Pick the next stage yourself"
+      ],
+      "example_prompt": "Do stage 1 of <backlog file>, stop and report. I will pick the next stage.",
+      "evidence_sessions": [
+        "s1"
+      ]
+    }
+  ],
+  "agent_files": {
+    "update_pattern": "Example: 1 edit in 2 sessions, made right after a correction.",
+    "findings": [
+      {
+        "path": "/home/claude/demo-app/CLAUDE.md",
+        "status": "stale",
+        "evidence": "references a missing script",
+        "action": "update paths"
+      }
+    ],
+    "repeated_corrections": [
+      {
+        "theme": "Reusable workflow is off limits",
+        "occurrences": 2,
+        "target_file": "CLAUDE.md",
+        "proposed_line": "Never change the inputs of the reusable workflow in ./shared/."
+      }
+    ],
+    "rewrites": [
+      {
+        "path": "CLAUDE.md",
+        "action": "rewrite",
+        "issue": "example issue",
+        "proposed_text": "example text"
+      }
+    ],
+    "routine": [
+      "After the second identical correction, add it to CLAUDE.md in the same session."
+    ]
+  },
+  "model_routing": {
+    "mismatches": [
+      {
+        "session_id": "s2",
+        "task_type": "exploration",
+        "model": "opus",
+        "issue": "heavy for trivial",
+        "suggestion": "use a faster tier"
+      }
+    ],
+    "guide": [
+      {
+        "task_type": "exploration",
+        "recommended": "fast tier",
+        "why": "short lookups",
+        "evidence": "no data in sample"
+      }
+    ],
+    "rules_of_thumb": [
+      "Example: switch with /model before pasting a long planning prompt."
+    ]
+  },
+  "templates": [
+    {
+      "task_type": "infra-ci",
+      "title": "Fix a failing pipeline",
+      "recommended_model": "balanced tier",
+      "technique": "verify-loop",
+      "goal": "<outcome and why>",
+      "context": "<files, versions, failing log line>",
+      "constraints": "<what not to touch>",
+      "approach": "Explain the cause from the logs first, then fix",
+      "done_when": "<command that must pass>"
+    }
+  ],
+  "action_plan": {
+    "now": [
+      {
+        "text": "Example: add the repeated correction to CLAUDE.md",
+        "sources": [
+          "claude-md",
+          "memory"
+        ]
+      }
+    ],
+    "this_month": [
+      {
+        "text": "Example: run /doctor prompt-audit on the file that looks stale and apply the edits you agree with",
+        "sources": [
+          "prompt-audit"
+        ]
+      }
+    ],
+    "ongoing": [
+      "Example: update agent files right after corrections"
+    ]
+  },
+  "stats": {
+    "repeated_corrections_not_captured": 1
+  },
+  "limits": [
+    "Example: 2 synthetic sessions only."
+  ]
+}
