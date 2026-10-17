@@ -15,9 +15,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
-import math
 import re
-import textwrap
 import sys
 from pathlib import Path
 
@@ -26,63 +24,92 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
 from redact import compile_extra, redact  # noqa: E402
 
-LIGHT = ("--bg:#fafaf9;--fg:#1c1917;--muted:#6b6560;--card:#fff;--line:#e7e5e4;--accent:#2563eb;--accent-bg:#eff4ff;--good:#15803d;"
-         "--bad-rgb:220 70 60;--bad:#b91c1c;--warn:#b45309;--code:#f5f5f4;--win:#fff8e6;--win-line:#e9b949")
-DARK = ("--bg:#141413;--fg:#ecebe8;--muted:#9a958e;--card:#1e1d1b;--line:#33312e;--accent:#6ea0ff;--accent-bg:#1b2436;"
-        "--good:#4ade80;--bad-rgb:220 70 60;--bad:#f87171;--warn:#fbbf24;--code:#262522;--win:#2a2415;--win-line:#a07d1c")
+# Colour roles: blue = actions and links only; red and green = removed and added text (and bad/good status);
+# amber = warnings only. One neutral ladder (bg, card, code) with clear steps in both themes.
+LIGHT = ("--bg:#f7f8f9;--fg:#14171a;--muted:#5b636b;--card:#fff;--line:#dfe3e7;--code:#eef0f2;"
+         "--accent:#1d4ed8;--accent-rgb:29 78 216;--accent-bg:#eaf0ff;"
+         "--good:#166534;--ins-bg:#e3f4e8;--bad:#b42318;--del-bg:#fde8e6;--warn:#92400e;--warn-bg:#fdf1d8")
+DARK = ("--bg:#0e1012;--fg:#e8eaed;--muted:#98a1aa;--card:#16191c;--line:#272c31;--code:#1e2227;"
+        "--accent:#7aa7ff;--accent-rgb:122 167 255;--accent-bg:#172036;"
+        "--good:#6ee7a0;--ins-bg:#12301f;--bad:#ff8f86;--del-bg:#3a1816;--warn:#fbbf24;--warn-bg:#2e2410")
 
 # Theme: follows the system by default; the toggle in the header forces light or dark and is remembered.
 CSS = (":root{" + LIGHT + "}\n"
        "@media (prefers-color-scheme:dark){:root:not([data-theme=\"light\"]){" + DARK + "}}\n"
        ":root[data-theme=\"dark\"]{" + DARK + "}\n"
        ":root[data-theme=\"light\"]{" + LIGHT + "}\n") + """
+:root{--serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header.top{max-width:1000px;margin:0 auto;padding:20px 16px 6px}
-header.top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-header.top h1{font-size:24px;margin:0 0 2px}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--sans)}
+header.top{max-width:980px;margin:0 auto;padding:22px 16px 8px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+header.top h1{font:600 26px/1.2 var(--serif);margin:0 0 4px;letter-spacing:-.01em}
 .themebtn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
-.themebtn:hover{background:var(--code)}.themebtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.themebtn:hover{background:var(--code)}
 a{color:var(--accent)}
 .tabs{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line);display:flex;gap:2px;overflow-x:auto;padding:6px 12px}
 .tabs button{appearance:none;border:0;background:none;color:var(--muted);padding:8px 12px;border-radius:8px;white-space:nowrap;font:inherit;font-size:14px;cursor:pointer}
 .tabs button:hover{background:var(--code);color:var(--fg)}
 .tabs button[aria-selected=true]{background:var(--accent-bg);color:var(--accent);font-weight:600}
-.tabs button:focus-visible,a:focus-visible,button.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-main{max-width:1000px;margin:0 auto;padding:8px 16px 64px}
+.tabs .badge{display:inline-block;min-width:18px;margin-left:6px;padding:0 6px;border-radius:99px;background:var(--code);color:var(--muted);font-size:12px;font-weight:600;text-align:center}
+.tabs button[aria-selected=true] .badge{background:var(--card);color:var(--accent)}
+@media(max-width:760px){.tabs{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}}
+.tabs button:focus-visible,a:focus-visible,button.copy:focus-visible,.themebtn:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+main{max-width:980px;margin:0 auto;padding:8px 16px 72px}
 .js .panel{display:none}.js .panel.active{display:block}
-h2{font-size:20px;margin:24px 0 10px}h3{font-size:16px;margin:24px 0 8px}h4{margin:0 0 6px}
+.ph{font:600 22px/1.2 var(--serif);margin:24px 0 10px}
+.js .panel>.ph{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+h3{font:600 20px/1.25 var(--serif);margin:32px 0 10px;letter-spacing:-.005em}h4{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--muted)}
 .sub{color:var(--muted);margin:0 0 12px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0}
-.grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.stat b{display:block;font-size:24px;line-height:1.2}.stat span{color:var(--muted);font-size:13px}
-.callout{border-left:4px solid var(--accent);background:var(--card);padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0}
-.callout.warn{border-left-color:var(--warn)}
-.quickwin{background:var(--win);border:1px solid var(--win-line);border-radius:12px;padding:16px 18px;margin:14px 0}
-.quickwin .label{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warn)}
-.quickwin h2{margin:4px 0 6px;font-size:21px}
+.card p,.card li,.callout,.prose li,.prose p,.quickwin p,.doctor{max-width:70ch}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:10px 0}
+.prose{margin:8px 0;padding-left:20px}.prose li{margin:6px 0}
+.meta{display:flex;flex-wrap:wrap;gap:4px 28px;margin:4px 0 16px}.meta div{display:flex;gap:6px}.meta dt{color:var(--muted)}.meta dd{margin:0;font-weight:600}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px 24px;margin:8px 0}.facts div{border-top:2px solid var(--line);padding-top:8px}
+.facts dt{color:var(--muted);font-size:13px;order:2}.facts dd{margin:0;font:600 30px/1.1 var(--serif)}.facts div{display:flex;flex-direction:column}
+.callout{border-left:4px solid var(--accent);background:var(--card);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+.callout.warn{border-left-color:var(--warn);background:var(--warn-bg)}
+.doctor{border-left:4px solid var(--accent);background:var(--card);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+.quickwin{background:var(--accent-bg);border:2px solid var(--accent);border-radius:14px;padding:22px 26px;margin:16px 0 28px}
+.quickwin .label{font-size:13px;font-weight:600;color:var(--accent)}
+.quickwin h2{font:600 30px/1.15 var(--serif);margin:6px 0 10px;letter-spacing:-.01em}
+.quickwin p{font-size:17px;margin:0 0 6px}
+.quickwin .codebox{background:var(--card)}
+.codebox{border:1px solid var(--line);border-radius:8px;background:var(--code);margin:10px 0;overflow:hidden}
+.codebar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 6px 4px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.codebox pre{margin:0;border-radius:0;background:none;padding:12px 14px;font-size:14px}
+button.copy{font:inherit;font-size:12px;padding:3px 10px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:6px;cursor:pointer}
+button.copy:hover{background:var(--code)}
 .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);margin-right:4px}
 .tag.good{color:var(--good);border-color:var(--good)}.tag.bad{color:var(--bad);border-color:var(--bad)}.tag.warn{color:var(--warn);border-color:var(--warn)}
-.ba{display:grid;gap:10px;grid-template-columns:1fr 1fr}@media(max-width:700px){.ba{grid-template-columns:1fr}}
-.ba>div{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--code)}
-.ba h4{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+.ba{display:grid;gap:12px;grid-template-columns:1fr 1fr;margin:10px 0}@media(max-width:700px){.ba{grid-template-columns:1fr}}
+.ba>div{border-radius:6px;padding:10px 12px}
+.ba .before{background:var(--del-bg);border-left:3px solid var(--bad)}.ba .after{background:var(--ins-bg);border-left:3px solid var(--good)}
+.ba pre{background:none;padding:0;margin:4px 0 0}
+del{text-decoration:line-through;text-decoration-color:var(--bad);text-decoration-thickness:1.5px}
+ins{text-decoration:none;font-weight:700;border-bottom:2px solid var(--good)}
+pre,code{font-family:var(--mono);font-size:13px}
 pre{background:var(--code);padding:10px;border-radius:8px;overflow-x:auto;white-space:pre-wrap;margin:6px 0}
 .tablewrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
-th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:13px}
+td small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.scores{margin:8px 0 4px}.srow{margin:14px 0}.shead{display:flex;justify-content:space-between;gap:12px;font-weight:600}
+.shead .sval{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:600}
+.strack{height:10px;border-radius:5px;background:var(--code);margin:6px 0 4px;position:relative;overflow:hidden}
+.strack i{display:block;height:100%;border-radius:5px;background:var(--accent)}
+.strack:after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(to right,transparent 0,transparent calc(20% - 2px),var(--card) calc(20% - 2px),var(--card) 20%)}
+.snote{margin:0;color:var(--muted);font-size:14px;max-width:70ch}
 .bar{display:grid;grid-template-columns:150px 1fr 90px;gap:8px;align-items:center;margin:5px 0;font-size:14px}
-.bar i{display:block;height:14px;border-radius:4px;background:var(--accent)}.bar span.v{color:var(--muted);text-align:right;font-size:13px}
-.heat{background:rgb(var(--bad-rgb)/calc(var(--h,0)*.6))}
+.bar i{display:block;height:12px;border-radius:4px;background:var(--accent)}.bar span.v{color:var(--muted);text-align:right;font-size:13px}
+.heat{background:rgb(var(--accent-rgb)/calc(var(--h,0)*.35))}
 .muted{color:var(--muted)}.na{color:var(--muted);font-style:italic}
-button.copy{float:right;font-size:12px;padding:3px 10px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:6px;cursor:pointer}
 ul.check{list-style:none;padding:0}ul.check li{padding:4px 0}ul.check li:before{content:"\\2610  ";color:var(--muted)}
-.cols{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.cols{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 details{margin:8px 0}summary{cursor:pointer;color:var(--accent)}
-.next{margin-top:28px}.next a{color:var(--accent);cursor:pointer;text-decoration:none}
-svg text{fill:var(--fg);font-size:12px}svg .gl{stroke:var(--line);fill:none}svg .poly{fill:var(--accent);fill-opacity:.25;stroke:var(--accent);stroke-width:2}
-.srcs{margin:8px 0 0;font-size:13px;color:var(--muted)}.srcs a{margin-right:10px}
-.doctor{border-left:4px solid var(--good);background:var(--card);padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0}
-@media print{:root,:root[data-theme]{""" + LIGHT + """}.tabs,.themebtn,button.copy,.next{display:none}.js .panel{display:block!important}.card,.ba>div{break-inside:avoid}}
+.next{margin-top:24px}.next a{color:var(--accent);cursor:pointer}
+.srcs{display:flex;flex-wrap:wrap;gap:2px 14px;margin:8px 0 0;font-size:13px;color:var(--muted)}
+@media print{:root,:root[data-theme]{""" + LIGHT + """}.tabs,.themebtn,button.copy,.next{display:none}.js .panel{display:block!important}
+.js .panel>.ph{position:static;width:auto;height:auto;clip:auto}.card,.ba>div{break-inside:avoid}}
 """
 
 THEME_INIT = """(function(){try{var t=localStorage.getItem('pi-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();"""
@@ -221,7 +248,7 @@ def source_anchor(i) -> str:
 
 def source_links(ids) -> str:
     out = [source_anchor(i) for i in dict.fromkeys(ids) if i in SOURCES]
-    return f'<div class="srcs">Sources: {" · ".join(out)}</div>' if out else ""
+    return f'<div class="srcs"><span>Sources</span>{"".join(out)}</div>' if out else ""
 
 
 def infer_sources(text: str):
@@ -282,39 +309,49 @@ def lst(items, cls="") -> str:
     return f'<ul class="{cls}">' + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>"
 
 
-def copybox(id_, text, label="Copy") -> str:
-    return f'<button class="copy" data-target="{id_}">{esc(label)}</button><pre id="{id_}">{esc(text)}</pre>'
+def copybox(id_, text, label="") -> str:
+    """A code block with a copy toolbar inside it (no floating button)."""
+    return (f'<div class="codebox"><div class="codebar"><span>{esc(label)}</span>'
+            f'<button class="copy" data-target="{id_}">Copy</button></div><pre id="{id_}">{esc(text)}</pre></div>')
 
 
-def radar(scores) -> str:
-    """scores: list of (label, value 0..5). Labels wrap onto several lines and the canvas is wide
-    enough that none is cut off at the edge."""
-    n = len(scores)
-    if n < 3:
-        return na("Need at least 3 criteria for a radar chart")
-    W, H, cx, cy, R = 700, 360, 350, 180, 105
-    pts, axes, labels = [], [], []
-    for i, (lab, val) in enumerate(scores):
-        ang = -math.pi / 2 + 2 * math.pi * i / n
-        v = max(0.0, min(5.0, float(val))) / 5
-        pts.append(f"{cx + R * v * math.cos(ang):.1f},{cy + R * v * math.sin(ang):.1f}")
-        axes.append(f'<line class="gl" x1="{cx}" y1="{cy}" x2="{cx + R * math.cos(ang):.1f}" y2="{cy + R * math.sin(ang):.1f}"/>')
-        lx, ly = cx + (R + 16) * math.cos(ang), cy + (R + 16) * math.sin(ang)
-        anchor = "middle" if abs(math.cos(ang)) < 0.3 else ("start" if math.cos(ang) > 0 else "end")
-        lines = textwrap.wrap(str(lab), 24) or [""]
-        n_l = len(lines) + 1  # label lines plus the score line
-        sin = math.sin(ang)
-        y0 = ly - (n_l - 1) * 14 if sin < -0.9 else (ly + 10 if sin > 0.9 else ly + 4 - (n_l - 1) * 7)
-        tspans = "".join(f'<tspan x="{lx:.1f}" y="{y0 + k * 14:.1f}">{esc(t)}</tspan>' for k, t in enumerate(lines))
-        tspans += f'<tspan x="{lx:.1f}" y="{y0 + len(lines) * 14:.1f}" font-weight="700">{float(val):.1f} / 5</tspan>'
-        labels.append(f'<text text-anchor="{anchor}">{tspans}</text>')
-    rings = ""
-    for lvl in range(1, 6):
-        ring = " ".join(f"{cx + R * lvl / 5 * math.cos(-math.pi / 2 + 2 * math.pi * i / n):.1f},"
-                        f"{cy + R * lvl / 5 * math.sin(-math.pi / 2 + 2 * math.pi * i / n):.1f}" for i in range(n))
-        rings += f'<polygon class="gl" points="{ring}"/>'
-    return (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:760px;overflow:visible" role="img" aria-label="Prompt quality radar chart">'
-            f'{rings}{"".join(axes)}<polygon class="poly" points="{" ".join(pts)}"/>{"".join(labels)}</svg>')
+def redline(before: str, after: str) -> tuple:
+    """Word-level markup: removed words struck through in the before text, added words marked in the after text.
+    Skipped when the two texts share too little for a word diff to say anything."""
+    import difflib
+    a, b = (before or "").split(), (after or "").split()
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    if not a or not b or sm.ratio() < 0.25:
+        return esc(before), esc(after)
+    ob, oa = [], []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            ob.append(esc(" ".join(a[i1:i2])))
+            oa.append(esc(" ".join(b[j1:j2])))
+        else:
+            if i2 > i1:
+                ob.append("<del>" + esc(" ".join(a[i1:i2])) + "</del>")
+            if j2 > j1:
+                oa.append("<ins>" + esc(" ".join(b[j1:j2])) + "</ins>")
+    return " ".join(ob), " ".join(oa)
+
+
+def score_bars(scores) -> str:
+    """scores: list of (label, value 0..5, note). Sorted weakest first so the priority is the first row."""
+    if not scores:
+        return na("No scores")
+    rows = ""
+    for lab, val, note in sorted(scores, key=lambda x: float(x[1])):
+        v = max(0.0, min(5.0, float(val)))
+        rows += (f'<div class="srow"><div class="shead"><span>{esc(lab)}</span><span class="sval">{v:.1f} / 5</span></div>'
+                 f'<div class="strack" role="img" aria-label="{esc(lab)} {v:.1f} out of 5"><i style="width:{v / 5 * 100:.0f}%"></i></div>'
+                 + (f'<p class="snote">{esc(note)}</p>' if note else "") + "</div>")
+    return f'<div class="scores">{rows}</div><p class="sub">Scale 0 to 5, weakest first. Your judgment calls after reading the flagged turns, not a measurement.</p>'
+
+
+def status_chip(status) -> str:
+    cls = {"healthy": "good", "stale": "warn", "bloated": "warn", "thin": "warn", "at-risk": "warn"}.get(str(status).lower(), "")
+    return f'<span class="tag {cls}">{esc(status)}</span>'
 
 
 def redact_tree(x, extra):
@@ -353,80 +390,80 @@ def verify_quote(before: str, sids, S) -> tuple:
 
 # ----------------------------------------------------------------------------- panels
 
+def flagged_files(S, I):
+    find = {f.get("path"): f for f in (I.get("agent_files") or {}).get("findings", [])}
+    out = [f for f in S["agent_files"] if f["hints"] or f["possibly_dead_references"]]
+    out += [f for f in S["agent_files"] if find.get(f["path"], {}).get("status") in ("stale", "bloated", "thin", "at-risk") and f not in out]
+    return out
+
+
 def p_overview(S, I):
     A, T, M = S["aggregates"], S["aggregates"]["totals"], S["meta"]
     body = ""
     sessions = S.get("sessions", [])
     heur = sum(1 for s in sessions if s.get("task_type_source") == "heuristic")
     flt = (M.get("filters") or {}).get("project")
-    chips = [f'{M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions']
+    pool = (f'{M["sessions_analyzed"]} in this project' if flt
+            else f'{M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions')
+    meta = [("Sample", pool)]
     if M.get("date_range"):
-        chips.append(f'{M["date_range"][0]} to {M["date_range"][1]}')
+        meta.append(("Period", f'{M["date_range"][0]} to {M["date_range"][1]}'))
     if flt:
-        chips.append(f"project: {flt}")
-    chips.append("task labels reviewed" if sessions and heur == 0 else f"task labels: {heur} of {len(sessions)} heuristic")
-    body += '<p class="sub">' + " · ".join(esc(c) for c in chips) + "</p>"
+        meta.append(("Project", flt))
+    meta.append(("Task labels", "reviewed" if sessions and heur == 0 else f"{heur} of {len(sessions)} still guessed"))
+    body += '<dl class="meta">' + "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in meta) + "</dl>"
+    if M["sessions_analyzed"] < 10:
+        body += (f'<div class="callout warn"><b>Small sample ({M["sessions_analyzed"]} sessions).</b> Read these findings as leads, not statistics, '
+                 "and re-run after more sessions.</div>")
 
     qw = I.get("quick_win")
     if qw:
-        mins = f' · about {esc(qw.get("minutes"))} min' if qw.get("minutes") else ""
-        body += ('<div class="quickwin"><div class="label">Quick win' + mins + '</div>'
-                 f'<h2>{esc(qw.get("title"))}</h2>')
+        mins = f', about {esc(qw.get("minutes"))} minutes' if qw.get("minutes") else ""
+        body += f'<div class="quickwin"><div class="label">Quick win{mins}</div><h2>{esc(qw.get("title"))}</h2>'
         if qw.get("why"):
             body += f'<p>{esc(qw["why"])}</p>'
         if qw.get("do_this"):
-            body += copybox("qw", qw["do_this"])
+            body += copybox("qw", qw["do_this"], "Paste into Claude Code or your CLAUDE.md")
         if qw.get("evidence"):
-            body += f'<p class="muted">Evidence: {esc(qw["evidence"])}</p>'
+            body += f'<p class="muted" style="font-size:14px">Evidence: {esc(qw["evidence"])}</p>'
         body += "</div>"
     else:
         body += '<div class="callout warn"><b>No quick win provided.</b> insights.json should contain a <code>quick_win</code> object.</div>'
 
     if I.get("top_change"):
-        body += f'<div class="callout"><b>Highest-impact change:</b> {esc(I["top_change"])}</div>'
+        body += f'<div class="callout"><b>Highest-impact change.</b> {esc(I["top_change"])}</div>'
     heads = I.get("headline_insights") or []
-    body += "<h3>What the sessions show</h3>" + (f'<div class="card">{lst(heads)}</div>' if heads else na("headline_insights missing"))
+    body += "<h3>What the sessions show</h3>" + (
+        '<ul class="prose">' + "".join(f"<li>{esc(h)}</li>" for h in heads) + "</ul>" if heads else na("headline_insights missing"))
 
-    auto = sum((A.get("automated_turns_excluded") or {}).values())
-    uncaptured = (I.get("stats") or {}).get("repeated_corrections_not_captured")
-    if uncaptured is None:
-        uncaptured = sum(1 for r in A["repeated_corrections"] if not r["possibly_covered_by"])
-    cards = [
+    n_rep = len(A.get("repeated_instructions") or [])
+    facts = [
         (T["avg_user_turns"], "typed prompts per session"),
-        (f'{T.get("short_prompt_share_pct", 0)}%', "typed prompts of 3 words or fewer"),
-        (auto, "automated turns excluded"),
-        (f"{T['pct_sessions_with_correction_or_interrupt']}%", "sessions with corrections or interrupts"),
-        (A.get("agent_files_touched", 0), f"agent files touched ({A['agent_file_edit_count']} edit calls)"),
-        (uncaptured, "repeated corrections not in a file"),
-        (len(A["by_model"]), "model families used"),
-        (f"{T['active_hours']} h", "active time"),
-        (T["total_tool_errors"], "tool errors"),
+        (f"{T['pct_sessions_with_correction_or_interrupt']}%", "sessions with a correction or interrupt"),
+        (len(flagged_files(S, I)), "agent files flagged"),
+        (n_rep, "instructions repeated across sessions"),
     ]
-    body += "<h3>Numbers</h3><div class=\"grid\">" + "".join(
-        f'<div class="card stat"><b>{esc(v)}</b><span>{esc(l)}</span></div>' for v, l in cards) + "</div>"
-    if M["sessions_analyzed"] < 10:
-        body += (f'<div class="callout warn">Small sample ({M["sessions_analyzed"]} sessions). Treat findings as leads, not statistics. '
-                 'Re-run after more sessions.</div>')
+    body += "<h3>Numbers that matter</h3><dl class=\"facts\">" + "".join(
+        f"<div><dt>{esc(l)}</dt><dd>{esc(v)}</dd></div>" for v, l in facts) + "</dl>"
+    body += '<p class="sub">Everything else measured is on the Method tab.</p>'
     techs = I.get("techniques") or []
     if techs:
         t = techs[0]
         body += ('<h3>Technique to try</h3><div class="card">'
-                 f'<b>{esc(t.get("name"))}</b> <span class="tag">{esc(t.get("when", ""))[:90]}</span>'
+                 f'<b>{esc(t.get("name"))}</b>'
                  f'<p>{esc(t.get("why_for_you", ""))}</p>'
-                 '<p class="next"><a data-goto="techniques">See all recommended techniques →</a></p></div>')
+                 '<p class="next" style="margin:8px 0 0"><a data-goto="techniques" href="#techniques">See the recommended techniques</a></p></div>')
     return "Overview", body
 
 
 def p_prompts(S, I):
     pq = I.get("prompt_quality", {})
-    scores = [(x.get("criterion", "?"), x.get("score", 0)) for x in pq.get("scores", [])]
     body = ""
-    if scores:
-        body += f'<div class="card">{radar(scores)}</div>'
-        body += table(["Criterion", "Score (0-5)", "Note"], [[x.get("criterion"), x.get("score"), x.get("note", "")] for x in pq["scores"]])
+    if pq.get("scores"):
+        body += score_bars([(x.get("criterion", "?"), x.get("score", 0), x.get("note", "")) for x in pq["scores"]])
     else:
         h = S["aggregates"]["prompt_quality_heuristic"]
-        names = {"has_goal_why": "Goal and why", "has_scope": "Scope / constraints", "has_context_pointer": "Context pointers",
+        names = {"has_goal_why": "Goal and why", "has_scope": "Scope and constraints", "has_context_pointer": "Context pointers",
                  "has_done_criteria": "Done criteria", "asks_plan_first": "Plan first"}
         body += '<p class="sub">Regex heuristic on first prompts (insights.json had no scores).</p>'
         body += bars([(names[k], v, f"{v}") for k, v in h["pct"].items()], "%")
@@ -435,15 +472,17 @@ def p_prompts(S, I):
         sids = w.get("evidence_sessions", [])
         if w.get("before_kind") == "behavior":
             tag = '<span class="tag">behaviour, no prompt to quote</span>'
+            bhtml, ahtml = esc(w.get("before")), esc(w.get("after"))
         else:
             st, f, n = verify_quote(w.get("before", ""), sids, S)
             tag = {"verified": '<span class="tag good">verbatim quote checked</span>',
                    "partial": f'<span class="tag warn">partly found in transcript ({f}/{n})</span>',
                    "missing": '<span class="tag bad">not found in transcript: may be reconstructed</span>',
                    "unchecked": '<span class="tag">quote not checked</span>'}[st]
+            bhtml, ahtml = redline(w.get("before", ""), w.get("after", ""))
         body += (f'<div class="card"><b>{i}. {esc(w.get("title"))}</b> {tag}'
-                 f'<div class="ba"><div><h4>Before</h4><pre>{esc(w.get("before"))}</pre></div>'
-                 f'<div><h4>After</h4><pre>{esc(w.get("after"))}</pre></div></div>'
+                 f'<div class="ba"><div class="before"><h4>Your prompt</h4><pre>{bhtml}</pre></div>'
+                 f'<div class="after"><h4>Rewritten</h4><pre>{ahtml}</pre></div></div>'
                  f'<p>{esc(w.get("why"))}</p>'
                  f'{"<p class=muted>Evidence: " + esc(", ".join(sids)) + "</p>" if sids else ""}</div>')
     if not I.get("weaknesses"):
@@ -462,12 +501,12 @@ def p_prompts(S, I):
         def side(k, label, cls):
             d = bw.get(k, {})
             return (f'<div><h4><span class="tag {cls}">{label}</span> {esc(d.get("session_id", ""))}</h4>'
-                    f'<p><b>First prompt:</b></p><pre>{esc(d.get("first_prompt", ""))}</pre>'
+                    f'<p><b>First prompt</b></p><pre>{esc(d.get("first_prompt", ""))}</pre>'
                     f'<p>{esc(d.get("what_happened", ""))}</p>{lst(d.get("prompt_traits", []))}</div>')
         lb = ("best", "worst") if comparable else ("smoother", "rougher")
         body += f'<div class="ba">{side("best", lb[0], "good")}{side("worst", lb[1], "bad")}</div>'
         if bw.get("key_difference"):
-            body += f'<div class="callout"><b>Key difference:</b> {esc(bw["key_difference"])}</div>'
+            body += f'<div class="callout"><b>Key difference.</b> {esc(bw["key_difference"])}</div>'
     else:
         A = S["aggregates"]
         pairs = A.get("best_worst_by_task") or {}
@@ -511,8 +550,7 @@ def p_agent_files(S, I):
     AF = I.get("agent_files", {})
     find = {f.get("path"): f for f in AF.get("findings", [])}
     body = f'<p>{esc(AF.get("update_pattern", ""))}</p>' if AF.get("update_pattern") else ""
-    flagged = [f for f in S["agent_files"] if f["hints"] or f["possibly_dead_references"]]
-    flagged += [f for f in S["agent_files"] if find.get(f["path"], {}).get("status") in ("stale", "bloated", "thin", "at-risk") and f not in flagged]
+    flagged = flagged_files(S, I)
     vers = list(S["meta"].get("claude_code_versions") or {})
     too_old = bool(vers) and max(version_tuple(v) for v in vers) < (2, 1, 283)
     if flagged or AF.get("repeated_corrections") or AF.get("rewrites"):
@@ -535,12 +573,12 @@ def p_agent_files(S, I):
     for f in S["agent_files"]:
         fi = find.get(f["path"], {})
         status = fi.get("status") or (", ".join(f["hints"]) or "no flags")
-        rows.append([f["path"], f["kind"], f["scope"], f["last_modified"][:10], f"{f['lines']} lines / {f['size_bytes']} B",
-                     f["sessions_after_last_edit"], status, fi.get("evidence") or ", ".join(f["possibly_dead_references"][:3])])
+        meta = f'{f["kind"]}, {f["scope"]}, modified {f["last_modified"][:10]}, {f["lines"]} lines, {f["sessions_after_last_edit"]} sessions since'
+        evidence = fi.get("evidence") or ", ".join(f["possibly_dead_references"][:3])
         if fi.get("action"):
-            rows[-1][-1] = f'{rows[-1][-1]} → {fi["action"]}'
-    body += "<h3>File health</h3>" + table(
-        ["File", "Kind", "Scope", "Last modified", "Size", "Sessions since", "Status", "Evidence → action"], rows)
+            evidence = f'{evidence}  Next: {fi["action"]}' if evidence else f'Next: {fi["action"]}'
+        rows.append([f'{esc(f["path"])}<small>{esc(meta)}</small>', status_chip(status), esc(evidence)])
+    body += "<h3>File health</h3>" + table(["File", "Status", "Evidence and next step"], rows, raw_cols=(0, 1, 2))
     ev = S["aggregates"]["agent_file_edit_events"]
     body += "<h3>Update timeline</h3>" + table(["Date", "Project", "File", "Via", "Calls"],
                                               [[e["date"], e["project"], e["path"] + ("" if e.get("on_disk", True) else "  (no longer on disk)"), e["tool"], e.get("calls", 1)] for e in ev])
@@ -671,8 +709,16 @@ def p_plan(S, I):
 
 
 def p_method(S, I):
-    M = S["meta"]
-    body = f'<div class="card"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}.</p>'
+    M, A, T = S["meta"], S["aggregates"], S["aggregates"]["totals"]
+    auto = sum((A.get("automated_turns_excluded") or {}).values())
+    nums = [["Sessions analysed", f'{M["sessions_analyzed"]} of {M["sessions_available_total"]}'],
+            ["Typed prompts per session", T["avg_user_turns"]], ["Automated turns excluded", auto],
+            ["Prompts of 3 words or fewer", f'{T.get("short_prompt_share_pct", 0)}%'],
+            ["Sessions with a correction or interrupt", f'{T["pct_sessions_with_correction_or_interrupt"]}%'],
+            ["Agent files touched", f'{A.get("agent_files_touched", 0)} ({A["agent_file_edit_count"]} edit calls)'],
+            ["Model families used", len(A["by_model"])], ["Active time", f'{T["active_hours"]} h'], ["Tool errors", T["total_tool_errors"]]]
+    pre = "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
+    body = pre + f'<div class="card" style="margin-top:20px"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}.</p>'
     body += "<p><b>Measured:</b> " + esc("; ".join(M["measured"])) + ".</p>"
     body += "<p><b>Heuristic (candidates, confirmed by reading context):</b> " + esc("; ".join(M["heuristic"])) + ".</p>"
     body += f'<p><b>Not covered:</b> {esc(M["not_covered"])}</p>'
@@ -690,19 +736,22 @@ PANELS = [("overview", p_overview), ("prompts", p_prompts), ("techniques", p_tec
 
 
 def build(S, I) -> str:
+    badges = {"prompts": len(I.get("weaknesses") or []), "techniques": len(I.get("techniques") or []),
+              "agentfiles": len(flagged_files(S, I)), "templates": len(I.get("templates") or [])}
     tabs, panels = "", ""
     for n, (id_, fn) in enumerate(PANELS):
         title, body = fn(S, I)
         sel = "true" if n == 0 else "false"
+        badge = f'<span class="badge">{badges[id_]}</span>' if badges.get(id_) else ""
         tabs += (f'<button role="tab" id="t-{id_}" data-tab="{id_}" aria-controls="p-{id_}" aria-selected="{sel}" '
-                 f'tabindex="{0 if n == 0 else -1}">{esc(title)}</button>')
+                 f'tabindex="{0 if n == 0 else -1}">{esc(title)}{badge}</button>')
         panels += (f'<section class="panel{" active" if n == 0 else ""}" id="p-{id_}" role="tabpanel" aria-labelledby="t-{id_}">'
-                   f'<h2>{esc(title)}</h2>{body}</section>')
+                   f'<h2 class="ph">{esc(title)}</h2>{body}</section>')
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude Code prompt insights</title>'
             f'<script>{THEME_INIT}</script><style>{CSS}</style></head><body>'
             '<header class="top"><div><h1>Claude Code prompt insights</h1>'
-            '<p class="sub">Generated from your local session transcripts. Contains redacted quotes; review before sharing.</p></div>'
+            '<p class="sub">Built from your local session transcripts. Quotes are redacted; review them before sharing.</p></div>'
             '<button id="theme" class="themebtn" type="button" aria-label="Switch between system, light and dark theme">Theme: system</button></header>'
             f'<nav class="tabs" role="tablist" aria-label="Report sections">{tabs}</nav><main>{panels}</main>'
             f'<script>{JS}</script></body></html>')
