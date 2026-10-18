@@ -2,7 +2,9 @@
 
 A Claude Code skill that reads your own session history and tells you, in one self-contained HTML
 report, **how to prompt better**, **which working technique to try next**, **whether your agent files
-have gone stale**, and **whether you are using the right model for each kind of task**.
+have gone stale**, **whether you are using the right model and effort level for each kind of task**
+(subagents and workflows included), **roughly what your sessions cost at API list prices**, and, from
+the second run on, **what changed since the last report**.
 
 Everything runs locally. No network access is needed to build the report, and nothing leaves your machine.
 
@@ -13,11 +15,12 @@ apply in five minutes at the top of the first tab.
 
 | Tab | What is in it |
 |---|---|
-| **Overview** | The quick win (with a paste-ready block), the highest-impact change, headline findings, key numbers |
-| **Prompts** | Prompt-quality radar, the recurring weaknesses with before/after rewrites of your real prompts (quotes are checked against the transcript), strengths, a best-vs-worst comparison |
-| **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement), plan mode, staged delivery, verify loops, interview-first and more |
+| **Overview** | The quick win (with a paste-ready block), what changed since your last report, the highest-impact change, headline findings, key numbers |
+| **Prompts** | Prompt-quality scores, the recurring weaknesses with before/after rewrites of your real prompts (quotes are checked against the transcript), strengths, a best-vs-worst comparison, how sessions ended (passing check, commit, PR) |
+| **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement), plan mode, staged delivery, verify loops, interview-first, hooks and more |
 | **Agent files** | Health of CLAUDE.md, AGENTS.md, rules, skills, commands and subagents; what exists on disk; instructions you repeat across sessions; a `/doctor prompt-audit` hint when files look stale |
-| **Models** | Usage and tokens per model, task-type vs model matrix, models that look too heavy or too light for the job |
+| **Hooks & permissions** | Hooks and allow/ask/deny rules in your settings files, tool calls you approved or rejected by hand, rules worth turning into hooks, allow rules worth adding |
+| **Models & cost** | Messages and tokens per model and effort level, estimated cost by model, task type, subagent type and workflow, the most expensive sessions and why, task-type vs model matrix, models that look too heavy or too light |
 | **Templates** | Reusable prompts for your most common task types: goal, context, constraints, approach, done-when |
 | **Action plan** | Do now / this month / ongoing, with links to Anthropic's own documentation |
 | **Method** | What was measured vs guessed, sample size, warnings and limits |
@@ -99,8 +102,28 @@ prompt-insights/
   labels.json                      your corrected task types
   insights.json                    Claude's findings
   claude-prompt-insights.html      the report
+  history/<timestamp>/             a copy of summary.json and insights.json per report, for the next follow-up
   .gitignore                       ignores everything in this folder
 ```
+
+### Cost is an estimate, not your bill
+
+The cost figures multiply the token counts in your transcripts (main session and subagents) by the
+Claude API **list prices** from the [pricing page](https://platform.claude.com/docs/en/about-claude/pricing),
+copied into `scripts/pricing.py` with the date they were taken. They include cache writes (5-minute and
+1-hour), cache reads, output, fast mode and long-prompt rates where they apply.
+
+This is **not what you pay**. A Claude subscription, negotiated discounts, credits or a cloud provider's
+price list all change the real bill, and requests Claude Code makes in the background without writing
+them to the transcript are not counted. Use the figures to compare sessions, models and agent types
+with each other. To price with your own rates, pass `--prices prices.json`.
+
+### Follow-up between runs
+
+Each report build saves a copy of its data in `prompt-insights/history/`. The next run compares the
+sessions started since then with the sessions the previous report was built from (prompt habits,
+corrections, sessions ending on a passing check, estimated cost per session) and checks whether the
+lines it proposed for CLAUDE.md, rules and hooks are now in your files.
 
 Reports contain redacted quotes from your sessions, so they must not be committed. The skill adds a
 `/prompt-insights/` line to the enclosing git repository's `.gitignore` (and a `.gitignore` inside the
@@ -124,13 +147,15 @@ python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --show <sessi
 | `--project TEXT` | Only sessions whose project folder contains the text; also narrows the agent-file check to that project |
 | `--since-days N` | Only sessions from the last N days |
 | `--exclude-session ID` | Skip a session (repeatable) |
-| `--prices prices.json` | Optional cost estimate (USD per 1M tokens, keyed by model name); without it no cost is shown |
+| `--prices prices.json` | Your own prices (USD per 1M tokens, keyed by a model-name substring: `input`, `output`, `cache_read`, `cache_write`, `cache_write_1h`); overrides the built-in list prices for matching models |
+| `--no-subagents` | Skip subagent and workflow transcripts (faster; their models, tokens and cost are then missing) |
 | `--extra-redact REGEX` | Redact more terms, such as customer or host names (repeatable) |
 | `--labels labels.json` | Your corrected task types |
 
 ## Privacy and safety
 
 - **Read-only** on `~/.claude` and on your repositories. The only things it writes are the files in `./prompt-insights/` and one line in `.gitignore`.
+- **Settings files:** only the `hooks` and `permissions` keys are read; environment variables and other settings never enter the summary.
 - **Redaction in code** removes API keys, tokens, passwords, emails, IP addresses and long blobs before Claude sees any text, and again when the report is built. Skim `summary.json` before sharing anything.
 - **Only your own typed prompts count.** Task notifications, messages from other sessions and injected reminders are excluded. Arguments of skill slash commands count, because you typed them.
 - **The report loads nothing from the internet.** Only the documentation links in the Action plan are links you click.
@@ -157,7 +182,8 @@ This repository is an [APM](https://microsoft.github.io/apm/) package.
 apm.yml                               package manifest
 .apm/skills/prompt-insights/
   SKILL.md                            the skill instructions
-  scripts/                            analyze_sessions.py, build_report.py, outdir.py, redact.py
+  scripts/                            analyze_sessions.py, build_report.py, pricing.py, subagents.py,
+                                      settings_scan.py, history.py, outdir.py, redact.py
   references/                         report schema, prompting techniques, model routing
   assets/                             structural example of insights.json
 ```

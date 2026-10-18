@@ -21,7 +21,9 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep the installed skill folder free of __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from history import snapshot  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
+from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL  # noqa: E402
 from redact import compile_extra, redact  # noqa: E402
 
 # Colour roles: blue = actions and links only; red and green = removed and added text (and bad/good status);
@@ -191,6 +193,10 @@ TECHNIQUES = [
     ("deep-thinking", "Ask for deeper reasoning where it counts",
      "For design choices and hard bugs, ask it to think through options and trade-offs before choosing; keep routine edits on a fast path.",
      "Architecture decisions and bugs that survived a first fix."),
+    ("hooks", "Enforce mechanical rules with hooks",
+     "A hook in settings.json runs a command at a fixed point (after an edit, before a tool call, when Claude stops), every time. "
+     "CLAUDE.md lines are advice the model can miss; a hook cannot be skipped.",
+     "A rule you can check with a command (format, run tests, never touch a path) is still broken after it went into CLAUDE.md."),
 ]
 
 
@@ -215,6 +221,9 @@ SOURCES = {
     "workflows": ("Common workflows", CC + "common-workflows"),
     "how-it-works": ("How Claude Code works", CC + "how-claude-code-works"),
     "features": ("Extend Claude Code: skills, hooks, MCP, subagents", CC + "features-overview"),
+    "permissions": ("Configure permissions: allow, ask and deny rules", CC + "permissions"),
+    "settings": ("Claude Code settings files", CC + "settings"),
+    "pricing": ("Claude API pricing (the list prices behind the cost estimate)", PRICING_URL),
     "prompting": ("Prompting best practices (Claude Platform docs)",
                   "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"),
     "context-eng": ("Effective context engineering for AI agents (Anthropic engineering)",
@@ -226,7 +235,7 @@ TECH_SOURCES = {
     "staged": ["plan", "best-practices"], "verify-loop": ["verify"], "builder-critic": ["sub-agents", "best-practices"],
     "repro-first": ["verify", "workflows"], "subagent-research": ["investigate", "sub-agents"],
     "context-hygiene": ["context", "context-eng"], "standing-rules": ["claude-md", "memory"],
-    "pattern-reference": ["prompting"], "deep-thinking": ["prompting", "model-config"],
+    "pattern-reference": ["prompting"], "deep-thinking": ["prompting", "model-config"], "hooks": ["hooks", "settings"],
 }
 # Used when an action item names no sources: match the topic from its wording.
 KEYWORD_SOURCES = [
@@ -238,6 +247,8 @@ KEYWORD_SOURCES = [
     (r"\bplan\b|plan mode|research|rpi", ["plan"]), (r"stage|backlog|scope|split", ["plan"]),
     (r"/clear|context|handoff|long session", ["context"]), (r"\bhook", ["hooks"]),
     (r"interview|spec", ["interview"]),
+    (r"permission|allow rule|allowlist|auto mode|approval", ["permissions"]),
+    (r"\bcost|\bprice|spend|\$\d|token budget", ["pricing"]), (r"\beffort\b", ["model-config"]),
 ]
 
 
@@ -277,6 +288,42 @@ def fmt_int(n) -> str:
         return esc(n)
 
 
+def usd(x) -> str:
+    """Cost figures always carry a tilde: they are estimates, never a bill."""
+    if x is None:
+        return "n/a"
+    try:
+        v = float(x)
+    except Exception:
+        return esc(x)
+    return f"~${v:,.2f}" if v >= 0.01 or v == 0 else "~<$0.01"
+
+
+def cost_meta(S) -> dict:
+    c = S["aggregates"].get("cost") or {}
+    return {"source": c.get("source") or PRICING_URL, "as_of": c.get("prices_as_of") or PRICES_AS_OF,
+            "disclaimer": c.get("disclaimer") or DISCLAIMER, "custom": c.get("custom_prices")}
+
+
+def cost_note(S, short=False) -> str:
+    """The estimate disclaimer, with a link to the pricing page the numbers come from."""
+    m = cost_meta(S)
+    link = f'<a href="{esc(m["source"])}" target="_blank" rel="noopener noreferrer">Claude API pricing page</a>'
+    custom = " Prices from your --prices file replaced the list price for some models." if m["custom"] else ""
+    if short:
+        return (f'<p class="muted" style="font-size:13px">Estimate at list prices from the {link} (as of {esc(m["as_of"])}). '
+                f"Not your actual cost.{custom}</p>")
+    return (f'<div class="callout warn"><b>Cost is an estimate, not your bill.</b> Token counts from your transcripts are '
+            f'multiplied by the Claude API list prices on the {link} (copied {esc(m["as_of"])}). What you really pay depends on '
+            f"your plan: a Claude subscription, discounts, credits or a cloud provider's price list all change it.{custom}</div>")
+
+
+def sid(s_id, title=None) -> str:
+    """Session cell: short id plus the session title Claude Code generated (raw HTML)."""
+    t = f"<small>{esc(title)}</small>" if title else ""
+    return f"{esc(str(s_id or '')[:8])}{t}"
+
+
 def na(msg="Not provided in insights.json") -> str:
     return f'<p class="na">{esc(msg)}</p>'
 
@@ -313,6 +360,14 @@ def copybox(id_, text, label="") -> str:
     """A code block with a copy toolbar inside it (no floating button)."""
     return (f'<div class="codebox"><div class="codebar"><span>{esc(label)}</span>'
             f'<button class="copy" data-target="{id_}">Copy</button></div><pre id="{id_}">{esc(text)}</pre></div>')
+
+
+def hook_box(id_, hook: dict) -> str:
+    """A proposed hook as the settings.json block to paste (shape from the Claude Code hooks guide)."""
+    block = {"hooks": {hook.get("event") or "PostToolUse": [
+        {"matcher": hook.get("matcher", ""), "hooks": [{"type": "command", "command": hook.get("command", "")}]}]}}
+    why = f'<p class="muted" style="font-size:14px">{esc(hook["why"])}</p>' if hook.get("why") else ""
+    return why + copybox(id_, json.dumps(block, indent=2), "Merge into .claude/settings.json (project) or ~/.claude/settings.json")
 
 
 def redline(before: str, after: str) -> tuple:
@@ -397,6 +452,50 @@ def flagged_files(S, I):
     return out
 
 
+def fmt_metric(key, v) -> str:
+    if v is None:
+        return "-"
+    return usd(v) if key == "cost_per_session" else f"{v:g}"
+
+
+def followup_html(S, I) -> str:
+    fu = S.get("followup")
+    if not fu:
+        return ""
+    pr = fu.get("previous_report") or {}
+    when = str(pr.get("generated_at") or "?")[:10]
+    body = (f'<h3>Since your last report</h3><p class="sub">Previous report from {esc(when)}, built from '
+            f'{esc(pr.get("sessions_analyzed", "?"))} sessions. {esc(fu.get("sessions_since", 0))} session(s) in this run started after it.</p>')
+    if I.get("followup_note"):
+        body += f'<div class="callout"><b>What changed.</b> {esc(I["followup_note"])}</div>'
+    rows = []
+    for m in fu.get("metrics") or []:
+        b, a = m.get("before"), m.get("after")
+        if b is None or a is None:
+            tag = '<span class="tag">no comparison</span>'
+        elif abs(a - b) < 1e-9:
+            tag = '<span class="tag">same</span>'
+        elif m.get("better") is None:
+            tag = '<span class="tag">changed</span>'
+        else:
+            good = (a > b) == (m["better"] == "higher")
+            tag = f'<span class="tag {"good" if good else "bad"}">{"better" if good else "worse"}</span>'
+        label = esc(m.get("label")) + (' <span class="tag good">quick win</span>' if m.get("quick_win") else "")
+        rows.append([label, esc(fmt_metric(m.get("key"), b)), esc(fmt_metric(m.get("key"), a)), tag])
+    if rows:
+        body += table(["Measure", "Before (last report's sample)", "Since then", ""], rows, raw_cols=(0, 1, 2, 3))
+    adv = fu.get("advice") or []
+    if adv:
+        cls = {"landed": "good", "partly": "warn", "not found": "bad", "target missing": "warn"}
+        body += "<h4 style=\"margin-top:16px\">Did last report's advice land in your files?</h4>" + table(
+            ["Advice", "Kind", "Target", "Status"],
+            [[esc(x.get("item")), esc(x.get("kind")), esc(x.get("target")),
+              f'<span class="tag {cls.get(x.get("status"), "")}">{esc(x.get("status"))}</span>'
+              + (f'<small>{esc(x["where"])}</small>' if x.get("where") else "")] for x in adv], raw_cols=(0, 1, 2, 3))
+    body += f'<p class="muted" style="font-size:13px">{esc(fu.get("note", ""))}</p>'
+    return body
+
+
 def p_overview(S, I):
     A, T, M = S["aggregates"], S["aggregates"]["totals"], S["meta"]
     body = ""
@@ -430,6 +529,7 @@ def p_overview(S, I):
     else:
         body += '<div class="callout warn"><b>No quick win provided.</b> insights.json should contain a <code>quick_win</code> object.</div>'
 
+    body += followup_html(S, I)
     if I.get("top_change"):
         body += f'<div class="callout"><b>Highest-impact change.</b> {esc(I["top_change"])}</div>'
     heads = I.get("headline_insights") or []
@@ -443,8 +543,16 @@ def p_overview(S, I):
         (len(flagged_files(S, I)), "agent files flagged"),
         (n_rep, "instructions repeated across sessions"),
     ]
+    vf = (A.get("outcomes") or {}).get("verified_finish_pct")
+    if vf is not None:
+        facts.append((f"{vf}%", "sessions with edits that ended on a passing check"))
+    c = A.get("cost")
+    if c:
+        facts.append((usd(c.get("total_usd")), "estimated cost at API list prices (not your bill)"))
     body += "<h3>Numbers that matter</h3><dl class=\"facts\">" + "".join(
         f"<div><dt>{esc(l)}</dt><dd>{esc(v)}</dd></div>" for v, l in facts) + "</dl>"
+    if c:
+        body += cost_note(S, short=True)
     body += '<p class="sub">Everything else measured is on the Method tab.</p>'
     techs = I.get("techniques") or []
     if techs:
@@ -498,9 +606,13 @@ def p_prompts(S, I):
         if not comparable:
             body += (f'<div class="callout warn"><b>Not a like-for-like comparison.</b> {esc(bw.get("comparability_note", ""))}</div>')
 
+        titles = {s["id"]: s.get("title") for s in S.get("sessions", [])}
+
         def side(k, label, cls):
             d = bw.get(k, {})
-            return (f'<div><h4><span class="tag {cls}">{label}</span> {esc(d.get("session_id", ""))}</h4>'
+            t = next((v for i, v in titles.items() if d.get("session_id") and i.startswith(str(d["session_id"]))), None)
+            return (f'<div><h4><span class="tag {cls}">{label}</span> {esc(d.get("session_id", ""))}'
+                    f'{" · " + esc(t) if t else ""}</h4>'
                     f'<p><b>First prompt</b></p><pre>{esc(d.get("first_prompt", ""))}</pre>'
                     f'<p>{esc(d.get("what_happened", ""))}</p>{lst(d.get("prompt_traits", []))}</div>')
         lb = ("best", "worst") if comparable else ("smoother", "rougher")
@@ -511,9 +623,19 @@ def p_prompts(S, I):
         A = S["aggregates"]
         pairs = A.get("best_worst_by_task") or {}
         cands = [x for v in pairs.values() for x in (v["best"], v["worst"])] or A["best_session_candidates"] + A["worst_session_candidates"]
-        rows = [[x["session_id"][:8], x["task_type"], x["model"], x["user_turns"], x["friction_per_turn"], x["first_prompt"]] for x in cands]
+        rows = [[sid(x["session_id"], x.get("title")), esc(x["task_type"]), esc(x["model"]), esc(x["user_turns"]),
+                 esc(x["friction_per_turn"]), esc(x["first_prompt"])] for x in cands]
         body += ('<p class="sub">Candidates by friction score (insights.json had no comparison).</p>'
-                 + table(["Session", "Task", "Model", "Turns", "Friction/turn", "First prompt"], rows))
+                 + table(["Session", "Task", "Model", "Turns", "Friction/turn", "First prompt"], rows, raw_cols=range(6)))
+
+    oc = S["aggregates"].get("outcomes")
+    if oc and oc.get("by_task_type"):
+        body += ("<h3>How sessions ended</h3><p class=\"sub\">Per task type: sessions that edited files, and how many of those ended "
+                 "with a test, build, lint or type check that passed after the last edit (in the session or a subagent).</p>")
+        body += table(["Task type", "Sessions", "With edits", "Ended on a passing check", "Committed", "Pushed", "Pull request"],
+                      [[t, d["sessions"], d["with_edits"], f'{d["verified_finish"]} of {d["with_edits"]}' if d["with_edits"] else "-",
+                        d["committed"], d["pushed"], d["with_pr"]] for t, d in oc["by_task_type"].items()])
+        body += f'<p class="muted" style="font-size:13px">{esc(oc.get("note", ""))}</p>'
     return "Prompts", body
 
 
@@ -585,9 +707,15 @@ def p_agent_files(S, I):
     body += "<h3>Repeated corrections to capture</h3>"
     rc = AF.get("repeated_corrections", [])
     for i, r in enumerate(rc):
+        hook = r.get("hook") if isinstance(r.get("hook"), dict) else None
+        where = "enforce with a hook" if hook or r.get("enforcement") == "hook" else f'add to {r.get("target_file", "CLAUDE.md")}'
         body += (f'<div class="card"><b>{esc(r.get("theme"))}</b> '
-                 f'<span class="tag">{esc(r.get("occurrences", ""))}x</span><span class="tag">add to {esc(r.get("target_file", "CLAUDE.md"))}</span>'
-                 f'{copybox(f"rc{i}", r.get("proposed_line"))}</div>')
+                 f'<span class="tag">{esc(r.get("occurrences", ""))}x</span><span class="tag">{esc(where)}</span>')
+        if r.get("proposed_line"):
+            body += copybox(f"rc{i}", r.get("proposed_line"))
+        if hook:
+            body += hook_box(f"rch{i}", hook)
+        body += "</div>"
     if not rc:
         auto = S["aggregates"]["repeated_corrections"]
         body += table(["Occurrences", "Sample", "Possibly covered by"],
@@ -623,16 +751,25 @@ def p_models(S, I):
         body += (f'<div class="callout warn"><b>Task types are still heuristic for {len(heur)} of {len(S["sessions"])} sessions.</b> '
                  'The task x model matrix below compares only as well as those labels are right. Review labels.todo.json, save it as '
                  'labels.json and re-run the analyzer with --labels.</div>')
-    body += "<h3>Assistant messages by model</h3>" + bars(
-        [(f, d["assistant_msgs"], fmt_int(d["assistant_msgs"])) for f, d in sorted(bm.items(), key=lambda kv: -kv[1]["assistant_msgs"])])
+    body += "<h3>Assistant messages by model</h3><p class=\"sub\">Main conversation + subagents.</p>" + bars(
+        [(f, d["assistant_msgs"] + d.get("subagent_msgs", 0), f'{fmt_int(d["assistant_msgs"])} + {fmt_int(d.get("subagent_msgs", 0))}')
+         for f, d in sorted(bm.items(), key=lambda kv: -(kv[1]["assistant_msgs"] + kv[1].get("subagent_msgs", 0)))])
+    be = A.get("by_effort") or {}
+    if be:
+        body += ("<h3>Effort level</h3><p class=\"sub\">Assistant messages per effort level, main conversation + subagents. "
+                 "Effort is set with /effort or per agent; higher effort thinks longer and costs more output tokens.</p>") + bars(
+            [(e, d["main_msgs"] + d["subagent_msgs"], f'{fmt_int(d["main_msgs"])} + {fmt_int(d["subagent_msgs"])}') for e, d in be.items()])
     body += "<h3>Sessions by task type</h3>" + bars([(t, d["sessions"], str(d["sessions"])) for t, d in A["by_task_type"].items()])
-    body += "<h3>Tokens (measured)</h3>" + table(
-        ["Model", "Sessions", "Input", "Output", "Cache read", "Cache write", "Est. cost USD"],
+
+    body += spend_html(S, I)
+
+    body += "<h3>Tokens (measured)</h3><p class=\"sub\">Including subagents. The cost column is the list-price estimate above.</p>" + table(
+        ["Model", "Sessions", "Input", "Output", "Cache read", "Cache write", "Est. cost"],
         [[f, d["sessions"], fmt_int(d["tokens"]["input"]), fmt_int(d["tokens"]["output"]), fmt_int(d["tokens"]["cache_read"]),
-          fmt_int(d["tokens"]["cache_write"]), d["estimated_cost_usd"] if d["estimated_cost_usd"] is not None else "n/a"] for f, d in bm.items()])
-    if all(d["estimated_cost_usd"] is None for d in bm.values()):
-        body += '<p class="muted">No price file was given, so cost is not estimated. Cache reads are the largest token count by far; they are billed at a lower rate than fresh input.</p>'
-    fams = sorted(bm)
+          fmt_int(d["tokens"]["cache_write"]), usd(d["estimated_cost_usd"])] for f, d in bm.items()])
+    body += subagents_html(S)
+
+    fams = sorted(f for f, d in bm.items() if d["sessions"])
     mx = max((c["avg_friction_per_turn"] for r in A["task_model_matrix"].values() for c in r.values()), default=0) or 1
     rows = ""
     for t, r in A["task_model_matrix"].items():
@@ -640,24 +777,165 @@ def p_models(S, I):
         for f in fams:
             c = r.get(f)
             if c:
+                eff = ", ".join(f"{k} {v}" for k, v in (c.get("efforts") or {}).items() if k != "unknown")
+                cost = f', {usd(c["avg_est_cost_usd"])}/session' if c.get("avg_est_cost_usd") is not None else ""
                 rows += (f'<td class="heat" style="--h:{c["avg_friction_per_turn"] / mx:.2f}">n={c["sessions"]}<br>'
-                         f'<span class="muted">{c["avg_user_turns"]} turns, f/t {c["avg_friction_per_turn"]}</span></td>')
+                         f'<span class="muted">{c["avg_user_turns"]} turns, f/t {c["avg_friction_per_turn"]}{esc(cost)}'
+                         f'{"<br>effort: " + esc(eff) if eff else ""}</span></td>')
             else:
                 rows += '<td class="muted">-</td>'
         rows += "</tr>"
     body += ("<h3>Task type x model: friction matrix</h3><p class=\"sub\">Darker = more friction per typed prompt (f/t). "
              "Cells with n&lt;3 are anecdotes, not evidence.</p>"
              f'<div class="tablewrap"><table><thead><tr><th>Task type</th>{"".join(f"<th>{esc(f)}</th>" for f in fams)}</tr></thead><tbody>{rows}</tbody></table></div>')
+    titles = {s["id"]: s.get("title") for s in S.get("sessions", [])}
+
+    def title_of(x):
+        return next((v for i, v in titles.items() if x and i.startswith(str(x))), None)
     mism = MR.get("mismatches") or [{"session_id": m["session_id"], "task_type": m["task_type"], "model": m["model"],
-                                     "issue": m["kind"], "suggestion": m["evidence"]} for m in A["model_mismatch_candidates"]]
-    body += "<h3>Mismatches</h3>" + table(["Session", "Task", "Model", "Issue", "Suggestion / evidence"],
-                                          [[str(m.get("session_id", ""))[:8], m.get("task_type"), m.get("model"), m.get("issue"), m.get("suggestion")] for m in mism])
+                                     "effort": m.get("effort"), "issue": m["kind"], "suggestion": m["evidence"]}
+                                    for m in A["model_mismatch_candidates"]]
+    body += "<h3>Mismatches</h3>" + table(["Session", "Task", "Model", "Effort", "Issue", "Suggestion / evidence"],
+                                          [[sid(m.get("session_id"), title_of(m.get("session_id"))), esc(m.get("task_type")), esc(m.get("model")),
+                                            esc(m.get("effort") or "-"), esc(m.get("issue")), esc(m.get("suggestion"))] for m in mism],
+                                          raw_cols=range(6))
     guide = MR.get("guide", [])
-    body += "<h3>Model routing guide</h3>" + (table(["Task type", "Recommended model", "Why", "Evidence"],
-                                                    [[g.get("task_type"), g.get("recommended"), g.get("why"), g.get("evidence")] for g in guide]) if guide else na())
+    body += "<h3>Model routing guide</h3>" + (table(["Task type", "Recommended model", "Effort", "Why", "Evidence"],
+                                                    [[g.get("task_type"), g.get("recommended"), g.get("effort") or "-", g.get("why"), g.get("evidence")]
+                                                     for g in guide]) if guide else na())
     body += "<h3>Rules of thumb</h3>" + lst(MR.get("rules_of_thumb", []))
     body += '<p class="muted">Available models change. Re-check this guide against the current model list (/model) before adopting it.</p>'
-    return "Models", body
+    return "Models & cost", body
+
+
+PART_LABELS = {"cache_write": "Cache writes", "cache_read": "Cache reads", "output": "Output", "input": "Uncached input",
+               "web_search": "Web searches"}
+
+
+def spend_html(S, I) -> str:
+    c = S["aggregates"].get("cost")
+    if not c:
+        return ""
+    sp = I.get("spend") or {}
+    body = "<h3>Estimated cost</h3>" + cost_note(S)
+    if sp.get("headline"):
+        body += f'<div class="callout"><b>Where the money goes.</b> {esc(sp["headline"])}</div>'
+    facts = [(usd(c["total_usd"]), "total, estimated"), (usd(c["main_usd"]), "main conversations"),
+             (usd(c["subagent_usd"]), "subagents and workflows"), (usd(c["per_session_avg_usd"]), "per session, average")]
+    body += '<dl class="facts">' + "".join(f"<div><dt>{esc(l)}</dt><dd>{esc(v)}</dd></div>" for v, l in facts) + "</dl>"
+    parts = c.get("parts") or {}
+    if parts:
+        body += "<h4 style=\"margin-top:16px\">By token type</h4>" + bars(
+            [(PART_LABELS.get(k, k), v, usd(v)) for k, v in sorted(parts.items(), key=lambda kv: -kv[1]) if v > 0])
+    bt = c.get("by_task_type") or {}
+    if bt:
+        body += "<h4 style=\"margin-top:16px\">By task type</h4>" + table(
+            ["Task type", "Sessions", "Est. cost", "Per session"], [[t, d["sessions"], usd(d["usd"]), usd(d["per_session_usd"])] for t, d in bt.items()])
+    top = c.get("top_sessions") or []
+    if top:
+        body += "<h4 style=\"margin-top:16px\">Most expensive sessions</h4>" + table(
+            ["Session", "Task", "Model / effort", "Est. cost", "Of which subagents", "What drove it"],
+            [[sid(t["session_id"], t.get("title")), esc(t["task_type"]), esc(f'{t["model"]} / {t.get("effort") or "-"}'), esc(usd(t["usd"])),
+              esc(usd(t["subagent_usd"])), esc("; ".join(t.get("drivers") or []) or "-")] for t in top], raw_cols=range(6))
+    for i, x in enumerate(sp.get("savings") or []):
+        body += (f'<div class="card"><b>{esc(x.get("action"))}</b>'
+                 + (f'<p>{esc(x["why"])}</p>' if x.get("why") else "")
+                 + (f'<p class="muted">Evidence: {esc(x["evidence"])}</p>' if x.get("evidence") else "") + "</div>")
+    return body
+
+
+def subagents_html(S) -> str:
+    c = S["aggregates"].get("cost") or {}
+    T = S["aggregates"]["totals"]
+    bst = c.get("by_subagent_type") or {}
+    if not bst:
+        return ""
+    body = (f'<h3>Subagents and workflow agents</h3><p class="sub">{fmt_int(T.get("subagent_runs", 0))} runs in '
+            f'{T.get("sessions_with_subagents", 0)} sessions ({fmt_int(T.get("workflow_agent_runs", 0))} inside workflows), '
+            "measured from their own transcripts.</p>")
+    fmt = lambda d: ", ".join(f"{k} {fmt_int(v)}" for k, v in sorted(d.items(), key=lambda kv: -kv[1])) or "-"
+    body += table(["Agent type", "Runs", "Sessions", "Model (messages)", "Effort (messages)", "Est. cost", "Per run", "Tool errors"],
+                  [[t, fmt_int(d["runs"]), d["sessions"], fmt(d["models"]), fmt(d["effort"]), usd(d["usd"]), usd(d["per_run_usd"]),
+                    d["tool_errors"]] for t, d in bst.items()])
+    wfs = c.get("workflows") or []
+    if wfs:
+        titles = {s["id"]: s.get("title") for s in S.get("sessions", [])}
+        body += "<h4 style=\"margin-top:16px\">Workflows</h4>" + table(
+            ["Session", "Workflow", "Agents", "Phases (agents)", "Agent types", "Est. cost"],
+            [[sid(w["session_id"], titles.get(w["session_id"])), esc(w["id"]), esc(w["runs"]), esc(fmt(w["phases"])), esc(fmt(w["types"])),
+              esc(usd(w["cost_usd"]))] for w in wfs], raw_cols=range(6))
+    return body
+
+
+def p_settings(S, I):
+    A = S["aggregates"]
+    P, H = A.get("permissions") or {}, A.get("hooks_activity") or {}
+    files = S.get("settings") or []
+    IP = I.get("permissions") or {}
+    body = ('<p class="sub">Where a rule lives decides how reliably it is followed. Move a rule down this list when it keeps '
+            "being broken.</p>")
+    body += table(["Where the rule lives", "Good for", "How it is followed"], [
+        ["Your prompt", "one-off requests", "this session only"],
+        ["CLAUDE.md, rules, memory", "conventions and context", "read every session, but advice the model can miss"],
+        ["Skill", "repeatable procedures", "loaded when the task matches, or by /name"],
+        ["Hook (settings.json)", "anything a command can check or do", "runs every time, cannot be skipped"],
+        ["Permission rule (settings.json)", "which tool calls run without asking", "enforced by Claude Code"],
+    ])
+    if IP.get("findings"):
+        body += "<h3>Findings</h3>" + lst(IP["findings"])
+
+    body += "<h3>Settings files on disk</h3>"
+    if files:
+        rows = []
+        for x in files:
+            pm = x.get("permissions") or {}
+            ev = {}
+            for h in x.get("hooks") or []:
+                ev[h["event"]] = ev.get(h["event"], 0) + 1
+            rows.append([f'{esc(x["path"])}<small>{esc(x.get("scope"))}</small>',
+                         esc(", ".join(f"{k} {v}" for k, v in ev.items()) or ("error: " + x["error"] if x.get("error") else "none")),
+                         esc(f'{pm.get("allow", 0)} / {pm.get("ask", 0)} / {pm.get("deny", 0)}'), esc(pm.get("default_mode") or "-")])
+        body += table(["File", "Hooks", "Allow / ask / deny rules", "Default mode"], rows, raw_cols=(0, 1, 2, 3))
+        hooks = [(x["path"], h) for x in files for h in x.get("hooks") or []]
+        if hooks:
+            body += "<h4 style=\"margin-top:16px\">Hooks defined</h4>" + table(
+                ["File", "Event", "Matcher", "Runs"], [[p, h["event"], h["matcher"] or "(all)", h["command"]] for p, h in hooks])
+    else:
+        body += na("No settings files found for these projects.")
+    if H.get("stop_hook_runs"):
+        defined = any(x.get("hook_count") for x in files)
+        body += (f'<p>Stop hooks ran {fmt_int(H["stop_hook_runs"])} times in {H.get("sessions_with_stop_hooks", 0)} sessions '
+                 f'({H.get("hook_errors", 0)} errors, {H.get("stops_blocked_by_hook", 0)} times a hook kept Claude working).'
+                 + ("" if defined else " None are defined in the settings files above, so they come from plugins, which this "
+                                        "report does not inventory.") + "</p>")
+
+    body += "<h3>Permission prompts and rejected tool calls</h3>"
+    appr, rej = P.get("manual_approvals") or {}, P.get("rejected") or {}
+    facts = [(sum(appr.values()), "tool calls you approved by hand"), (P.get("sessions_with_manual_approval", 0), "sessions with a manual approval"),
+             (sum(rej.values()), "tool calls you rejected"), (sum((P.get("blocked_by_policy") or {}).values()), "blocked by a rule or the auto-mode classifier")]
+    body += '<dl class="facts">' + "".join(f"<div><dt>{esc(l)}</dt><dd>{esc(v)}</dd></div>" for v, l in facts) + "</dl>"
+    if appr:
+        body += "<h4 style=\"margin-top:16px\">Approved by hand, per tool</h4>" + table(["Tool", "Approvals"], list(appr.items()))
+    cmds = P.get("approval_commands") or {}
+    if cmds:
+        body += "<h4 style=\"margin-top:16px\">Bash commands approved by hand (first two words)</h4>" + table(["Command", "Times"], list(cmds.items()))
+    if rej:
+        body += ("<h4 style=\"margin-top:16px\">Rejected, per tool</h4><p class=\"sub\">A rejection is a correction without words: "
+                 "the agent chose an action you did not want. They count towards friction.</p>") + table(["Tool", "Rejections"], list(rej.items()))
+    if P.get("modes"):
+        body += "<h4 style=\"margin-top:16px\">Permission modes (sessions)</h4>" + table(["Mode", "Sessions"], list(P["modes"].items()))
+    rules = IP.get("allow_rules") or []
+    if rules:
+        block = {"permissions": {"allow": [r.get("rule", "") for r in rules if r.get("rule")]}}
+        body += ("<h4 style=\"margin-top:16px\">Allow rules to consider</h4>"
+                 + lst([f'{r.get("rule")}: {r.get("why", "")}' for r in rules])
+                 + copybox("allowrules", json.dumps(block, indent=2), "Merge into .claude/settings.json; keep deny rules for anything destructive"))
+    if appr or rej:
+        body += ('<div class="callout">Approving the same safe command again and again? Add an allow rule such as '
+                 '<code>Bash(npm run *)</code>, or run <code>/fewer-permission-prompts</code> if your Claude Code has it: it scans '
+                 "your transcripts and proposes an allowlist. Auto mode lets a classifier approve routine actions instead of you."
+                 + source_links(["permissions", "modes", "hooks"]) + "</div>")
+    return "Hooks & permissions", body
 
 
 def compose_template(t) -> str:
@@ -674,6 +952,7 @@ def p_templates(S, I):
     body = '<p class="sub">Copy a template, replace the &lt;placeholders&gt;, and send it. Each one names goal, context, constraints, approach and what done looks like.</p>'
     for i, t in enumerate(I.get("templates", [])):
         tech = f'<span class="tag">technique: {esc(t["technique"])}</span>' if t.get("technique") else ""
+        tech += f'<span class="tag good">effort: {esc(t["recommended_effort"])}</span>' if t.get("recommended_effort") else ""
         body += (f'<div class="card"><b>{esc(t.get("title"))}</b> '
                  f'<span class="tag">{esc(t.get("task_type", ""))}</span><span class="tag good">model: {esc(t.get("recommended_model", "-"))}</span>{tech}'
                  f'{copybox(f"tpl{i}", compose_template(t))}</div>')
@@ -716,11 +995,27 @@ def p_method(S, I):
             ["Prompts of 3 words or fewer", f'{T.get("short_prompt_share_pct", 0)}%'],
             ["Sessions with a correction or interrupt", f'{T["pct_sessions_with_correction_or_interrupt"]}%'],
             ["Agent files touched", f'{A.get("agent_files_touched", 0)} ({A["agent_file_edit_count"]} edit calls)'],
-            ["Model families used", len(A["by_model"])], ["Active time", f'{T["active_hours"]} h'], ["Tool errors", T["total_tool_errors"]]]
+            ["Model families used", len(A["by_model"])], ["Active time", f'{T["active_hours"]} h'], ["Tool errors", T["total_tool_errors"]],
+            ["Rejected tool calls", T.get("total_rejected_tool_calls", 0)],
+            ["Subagent runs (in workflows)", f'{T.get("subagent_runs", 0)} ({T.get("workflow_agent_runs", 0)})'],
+            ["Context compactions", (A.get("context") or {}).get("compactions", 0)]]
+    c = A.get("cost") or {}
+    if c:
+        nums.append(["Estimated cost at API list prices", usd(c.get("total_usd"))])
+        if c.get("claude_code_reported_usd") is not None:
+            nums.append([f'Cross-check: Claude Code\'s own running figure for the {c["sessions_with_claude_code_figure"]} sessions that record one',
+                         f'{usd(c["claude_code_reported_usd"])} (this estimate for the same sessions: {usd(c.get("estimate_same_sessions_usd"))})'])
     pre = "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
     body = pre + f'<div class="card" style="margin-top:20px"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}.</p>'
     body += "<p><b>Measured:</b> " + esc("; ".join(M["measured"])) + ".</p>"
+    if M.get("estimated"):
+        body += "<p><b>Estimated:</b> " + esc("; ".join(M["estimated"])) + "</p>"
     body += "<p><b>Heuristic (candidates, confirmed by reading context):</b> " + esc("; ".join(M["heuristic"])) + ".</p>"
+    if c:
+        body += ("<p><b>Cost:</b> the estimate prices each request at Claude API list rates (input, 5-minute and 1-hour cache "
+                 "writes, cache reads, output, web searches, fast mode and long-prompt rates where they apply). Requests Claude Code makes "
+                 "in the background and does not write to the transcript are not included, which is one reason the cross-check figure "
+                 "can be higher. Neither number is what you pay.</p>" + cost_note(S, short=True))
     body += f'<p><b>Not covered:</b> {esc(M["not_covered"])}</p>'
     body += ("<p><b>Typed prompts:</b> only entries marked as human input count. Task notifications, messages from other sessions and injected "
              "reminders are excluded. Arguments of skill slash commands count as typed prompts.</p>")
@@ -732,7 +1027,7 @@ def p_method(S, I):
 
 
 PANELS = [("overview", p_overview), ("prompts", p_prompts), ("techniques", p_techniques), ("agentfiles", p_agent_files),
-          ("models", p_models), ("templates", p_templates), ("plan", p_plan), ("method", p_method)]
+          ("settings", p_settings), ("models", p_models), ("templates", p_templates), ("plan", p_plan), ("method", p_method)]
 
 
 def build(S, I) -> str:
@@ -763,6 +1058,8 @@ def main() -> int:
     ap.add_argument("--insights", required=True)
     ap.add_argument("--out", default=f"{DEFAULT_DIR}/claude-prompt-insights.html")
     ap.add_argument("--extra-redact", action="append", default=[])
+    ap.add_argument("--no-snapshot", action="store_true",
+                    help="do not copy summary.json and insights.json to history/ (the next run compares against that copy)")
     a = ap.parse_args()
     try:
         S = json.loads(Path(a.summary).read_text())
@@ -787,6 +1084,9 @@ def main() -> int:
     guard = ensure_output_dir(out.parent)
     out.write_text(page, encoding="utf-8")
     print(f"Wrote {out} ({out.stat().st_size // 1024} KB), offline-safe, {len(PANELS)} tabs | {guard}")
+    if not a.no_snapshot:
+        d = snapshot(out.parent, Path(a.summary), Path(a.insights))
+        print(f"Saved a copy for the next run's follow-up in {d}")
     if missing:
         print("WARNING: insights.json is missing: " + ", ".join(missing))
     return 0
