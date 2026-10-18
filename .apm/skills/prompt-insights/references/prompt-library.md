@@ -2,7 +2,7 @@
 
 Read this when filling `official_prompts` in insights.json. The prompts come from the Claude Code
 prompt library (https://code.claude.com/docs/en/prompt-library) and live in
-`scripts/prompt_library.py` as `(id, phase, category, prompt)`. Use the exact `id`; the report looks
+`assets/prompt-library.json` (each entry: `id`, `phase`, `category`, `source`, `prompt`). Use the exact `id`; the report looks
 the prompt up by it and warns about ids it does not know.
 
 Recommend 0 to 3, never the whole list. Same rule as techniques: an official prompt earns a place

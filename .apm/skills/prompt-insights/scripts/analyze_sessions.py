@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep the installed skill folder free of __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from context import BIG_RESULT_TOKENS, context_flags, result_tokens, session_context  # noqa: E402
 from history import find_previous, followup  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
 from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL, context_tokens, price_usage  # noqa: E402
@@ -280,6 +281,7 @@ def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagent
     denials, denied_tools = Counter(), Counter()
     approvals, approval_cmds, blocked = Counter(), Counter(), Counter()
     compact_boundaries = compact_summaries = api_errors = 0
+    tool_res_tokens, big_results = Counter(), []
     turn_ms = []
     hooks = {"runs": 0, "errors": 0, "blocked_stop": 0}
     title = custom_title = None
@@ -337,6 +339,11 @@ def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagent
                     err_ids.add(b.get("tool_use_id") or f"err{len(err_ids)}")
             if results and not side:
                 names = [(tools.get(b.get("tool_use_id")) or {}).get("name") or "?" for b in results]
+                for b, n in zip(results, names):
+                    rt = result_tokens(b.get("content"))
+                    tool_res_tokens[n] += rt
+                    if rt >= BIG_RESULT_TOKENS:
+                        big_results.append({"tool": n, "tokens": rt})
                 if e.get("toolDenialKind"):
                     denials[str(e["toolDenialKind"])] += 1
                     if e["toolDenialKind"] == "user-rejected":
@@ -387,7 +394,7 @@ def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagent
             rec = msgs.get(mid)
             if rec is None or out >= rec["out"]:
                 msgs[mid] = {"model": msg.get("model"), "usage": usage, "out": out, "side": side,
-                             "effort": e.get("effort"), "order": len(msgs) if rec is None else rec["order"]}
+                             "effort": e.get("effort"), "ts": (rec or {}).get("ts") or ts, "order": len(msgs) if rec is None else rec["order"]}
             content = msg.get("content")
             if isinstance(content, list):
                 for b in content:
@@ -599,6 +606,8 @@ def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagent
         "tokens": {k: dict(v) for k, v in tokens.items()},
         "cost": cost,
         "peak_context_tokens": peak,
+        "context": session_context(main, context_tokens, slash, big_results, tool_res_tokens,
+                                   (sub or {}).get("runs", 0) if isinstance(sub, dict) else 0, strong),
         "tool_counts": dict(tool_counts.most_common(10)),
         "tool_calls": sum(tool_counts.values()),
         "tool_errors": len(err_ids),
@@ -1485,6 +1494,15 @@ def main():
             s.pop(k, None)
     for f in inventory:
         f.pop("_text", None)
+    ctx_rows = [s["context"] for s in sessions if s.get("context")]
+    agg["context"]["flags"] = context_flags(sessions)
+    agg["context"]["sessions_measured"] = len(ctx_rows)
+    agg["context"]["median_peak_tokens"] = sorted(c["peak_tokens"] for c in ctx_rows)[len(ctx_rows) // 2] if ctx_rows else None
+    agg["context"]["cold_restarts_total"] = sum(c["cold_restart_count"] for c in ctx_rows)
+    agg["context"]["note"] = ("Context sizes are MEASURED from each request's usage fields (input + cache read + cache write). Thresholds are "
+                              "this skill's rules of thumb, not Anthropic limits. Cache lifetime is read from the cache-write type in the "
+                              "transcript and assumed to be 1 hour (subscription) when absent; on an API key or cloud provider it is "
+                              "5 minutes by default, so cold-cache gaps would be more frequent than shown here.")
 
     summary = {
         "meta": {

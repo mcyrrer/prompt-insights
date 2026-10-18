@@ -24,8 +24,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from history import snapshot  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
 from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL  # noqa: E402
-from prompt_library import LIBRARY  # noqa: E402
 from redact import compile_extra, redact  # noqa: E402
+
+# Official Claude Code prompt library, shipped with the skill (assets/prompt-library.json).
+_LIB_DATA = json.loads((Path(__file__).resolve().parent.parent / "assets" / "prompt-library.json").read_text(encoding="utf-8"))
+LIB_META, LIB_SOURCES, LIBRARY = _LIB_DATA["library"], _LIB_DATA["sources"], _LIB_DATA["prompts"]
+LIB = {p["id"]: p for p in LIBRARY}
+
+
+def link(label, url) -> str:
+    if not url:
+        return esc(label)
+    return f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+
+
+def prompt_origin(p) -> str:
+    """Where a library prompt comes from: the library page, and the Anthropic page the entry is tagged with."""
+    s = LIB_SOURCES.get(p.get("source"), {})
+    out = link(LIB_META["name"], LIB_META["url"])
+    if s:
+        out += " &middot; from " + link(s["label"], s.get("url"))
+    return out
+
 
 # Colour roles: blue = actions and links only; red and green = removed and added text (and bad/good status);
 # amber = warnings only. One neutral ladder (bg, card, code) with clear steps in both themes.
@@ -228,6 +248,10 @@ SOURCES = {
     "prompt-library": ("Prompt library (official Claude Code prompts)", CC + "prompt-library"),
     "prompting": ("Prompting best practices (Claude Platform docs)",
                   "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"),
+    "costs": ("Manage costs effectively (reduce token usage)", CC + "costs#reduce-token-usage"),
+    "prompt-caching": ("How Claude Code uses prompt caching", CC + "prompt-caching"),
+    "context-window": ("Explore the context window", CC + "context-window"),
+    "autocompact": ("Set the auto-compact window", CC + "model-config#set-the-auto-compact-window"),
     "context-eng": ("Effective context engineering for AI agents (Anthropic engineering)",
                     "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"),
 }
@@ -364,6 +388,11 @@ def copybox(id_, text, label="") -> str:
             f'<button class="copy" data-target="{id_}">Copy</button></div><pre id="{id_}">{esc(text)}</pre></div>')
 
 
+def copy_cell(id_, text) -> str:
+    """Text in a table cell with an inline Copy button (for suggestions that sit in a table)."""
+    return f'<span id="{id_}">{esc(text)}</span> <button class="copy" data-target="{id_}">Copy</button>'
+
+
 def hook_box(id_, hook: dict) -> str:
     """A proposed hook as the settings.json block to paste (shape from the Claude Code hooks guide)."""
     block = {"hooks": {hook.get("event") or "PostToolUse": [
@@ -409,6 +438,44 @@ def score_bars(scores) -> str:
 def status_chip(status) -> str:
     cls = {"healthy": "good", "stale": "warn", "bloated": "warn", "thin": "warn", "at-risk": "warn"}.get(str(status).lower(), "")
     return f'<span class="tag {cls}">{esc(status)}</span>'
+
+
+FILE_STATUSES = ("healthy", "stale", "bloated", "thin", "at-risk")
+
+
+def effective_status(f, find) -> str:
+    """Model finding wins; otherwise derive from the script's own flags so every file lands in one status."""
+    st = str((find.get(f["path"]) or {}).get("status") or "").lower()
+    if st in FILE_STATUSES:
+        return st
+    h = f["hints"]
+    if f["possibly_dead_references"]:
+        return "at-risk"
+    for hint, status in (("bloated?", "bloated"), ("thin?", "thin"), ("untouched-90d+", "stale")):
+        if hint in h:
+            return status
+    return "healthy"
+
+
+def folder_label(f) -> str:
+    """~/.claude/ (global files) is one working folder; plugin files are grouped; the rest by project."""
+    scope = f["scope"]
+    return "~/.claude/" if scope == "global" else ("Plugins (managed)" if scope == "plugin" else scope)
+
+
+def file_health_by_folder(S, find) -> str:
+    folders = {}
+    for f in S["agent_files"]:
+        counts = folders.setdefault(folder_label(f), dict.fromkeys(FILE_STATUSES, 0))
+        counts[effective_status(f, find)] += 1
+    if not folders:
+        return na("No agent files found")
+    order = sorted(folders, key=lambda k: (k != "~/.claude/", k))
+    rows = []
+    for k in order:
+        c = folders[k]
+        rows.append([k, sum(c.values())] + [c[st] for st in FILE_STATUSES])
+    return table(["Working folder", "Files"] + [st.capitalize() for st in FILE_STATUSES], rows)
 
 
 def redact_tree(x, extra):
@@ -592,7 +659,7 @@ def p_prompts(S, I):
             bhtml, ahtml = redline(w.get("before", ""), w.get("after", ""))
         body += (f'<div class="card"><b>{i}. {esc(w.get("title"))}</b> {tag}'
                  f'<div class="ba"><div class="before"><h4>Your prompt</h4><pre>{bhtml}</pre></div>'
-                 f'<div class="after"><h4>Rewritten</h4><pre>{ahtml}</pre></div></div>'
+                 f'<div class="after"><h4>Rewritten <button class="copy" data-target="wk{i}">Copy</button></h4><pre id="wk{i}">{ahtml}</pre></div></div>'
                  f'<p>{esc(w.get("why"))}</p>'
                  f'{"<p class=muted>Evidence: " + esc(", ".join(sids)) + "</p>" if sids else ""}</div>')
     if not I.get("weaknesses"):
@@ -668,28 +735,26 @@ def p_techniques(S, I):
     body += (f'<details><summary>Technique catalog ({len(TECHNIQUES)})</summary>'
              + table(["Technique", "What it is", "Use it when"], [[t[1], t[2], t[3]] for t in TECHNIQUES]) + "</details>")
     body += (f'<details><summary>Official prompt library ({len(LIBRARY)})</summary>'
-             '<p class="sub">Every prompt from the Claude Code prompt library. Replace the {braces} with your own terms.</p>'
-             + table(["Phase", "Task", "Prompt"], [[p[1], p[2], p[3]] for p in LIBRARY]) + "</details>")
+             f'<p class="sub">Every prompt from the Claude Code prompt library, copied into the skill (fetched {esc(LIB_META["fetched"])}). Replace the {{braces}} with your own terms.</p>'
+             + table(["Phase", "Task", "Prompt", "Origin"], [[p["phase"], p["category"], p["prompt"], prompt_origin(p)] for p in LIBRARY], raw_cols=(3,)) + "</details>")
     return "Techniques", body
-
-
-LIB = {p[0]: p for p in LIBRARY}
 
 
 def official_prompts_html(I) -> str:
     """Prompts from the official library that fit this user. insights.json names them by id and supplies
-    the filled-in text; the library text itself comes from prompt_library.py, never from insights.json."""
+    the filled-in text; the library text itself comes from assets/prompt-library.json, never from insights.json."""
     recs = [r for r in I.get("official_prompts") or [] if r.get("id") in LIB]
     if not recs:
         return ""
     body = ('<h3>Official prompts to try</h3><p class="sub">Taken from the '
-            f'{source_anchor("prompt-library")}, filled in with your own project terms.</p>')
+            f'{source_anchor("prompt-library")} (bundled with this skill), filled in with your own project terms.</p>')
     for i, r in enumerate(recs):
-        _, phase, cat, text = LIB[r["id"]]
-        body += (f'<div class="card"><span class="tag">{esc(phase)}</span><span class="tag">{esc(cat)}</span>')
+        lp = LIB[r["id"]]
+        body += (f'<div class="card"><span class="tag">{esc(lp["phase"])}</span><span class="tag">{esc(lp["category"])}</span>')
         if r.get("why_for_you"):
             body += f'<p><b>Why it fits you:</b> {esc(r["why_for_you"])}</p>'
-        body += copybox(f"op{i}", r.get("prompt") or text, "Prompt library")
+        body += copybox(f"op{i}", r.get("prompt") or lp["prompt"], "Prompt library")
+        body += f'<p class="muted">Origin: {prompt_origin(lp)}</p>'
         if r.get("evidence_sessions"):
             body += f'<p class="muted">Evidence: {esc(", ".join(r["evidence_sessions"]))}</p>'
         body += "</div>"
@@ -719,16 +784,20 @@ def p_agent_files(S, I):
             [[r["project"], yn(r["exists"]), yn(r["claude_md"] or r["claude_local_md"]), yn(r["agents_md"]), r["rules"],
               r["agents"], r["skills"], f'{r["memory_files"]}' + (f' ({", ".join(r.get("memory_note_names", [])[:4])})' if r.get("memory_note_names") else ""),
               r["sessions"]] for r in roots])
+    body += "<h3>File health</h3>" + file_health_by_folder(S, find)
     rows = []
     for f in S["agent_files"]:
+        status = effective_status(f, find)
+        if status == "healthy":
+            continue
         fi = find.get(f["path"], {})
-        status = fi.get("status") or (", ".join(f["hints"]) or "no flags")
-        meta = f'{f["kind"]}, {f["scope"]}, modified {f["last_modified"][:10]}, {f["lines"]} lines, {f["sessions_after_last_edit"]} sessions since'
-        evidence = fi.get("evidence") or ", ".join(f["possibly_dead_references"][:3])
+        meta = f'{folder_label(f)}, {f["kind"]}, modified {f["last_modified"][:10]}, {f["lines"]} lines, {f["sessions_after_last_edit"]} sessions since'
+        evidence = fi.get("evidence") or ", ".join(f["possibly_dead_references"][:3]) or ", ".join(f["hints"])
         if fi.get("action"):
             evidence = f'{evidence}  Next: {fi["action"]}' if evidence else f'Next: {fi["action"]}'
         rows.append([f'{esc(f["path"])}<small>{esc(meta)}</small>', status_chip(status), esc(evidence)])
-    body += "<h3>File health</h3>" + table(["File", "Status", "Evidence and next step"], rows, raw_cols=(0, 1, 2))
+    if rows:
+        body += "<h3>Files needing attention</h3>" + table(["File", "Status", "Evidence and next step"], rows, raw_cols=(0, 1, 2))
     ev = S["aggregates"]["agent_file_edit_events"]
     body += "<h3>Update timeline</h3>" + table(["Date", "Project", "File", "Via", "Calls"],
                                               [[e["date"], e["project"], e["path"] + ("" if e.get("on_disk", True) else "  (no longer on disk)"), e["tool"], e.get("calls", 1)] for e in ev])
@@ -747,12 +816,12 @@ def p_agent_files(S, I):
     if not rc:
         auto = S["aggregates"]["repeated_corrections"]
         body += table(["Occurrences", "Sample", "Possibly covered by"],
-                      [[r["occurrences"], r["representative"], ", ".join(r["possibly_covered_by"]) or "-"] for r in auto]) if auto \
+                      [[r["occurrences"], copy_cell(f"arc{i}", r["representative"]), ", ".join(r["possibly_covered_by"]) or "-"] for i, r in enumerate(auto)], raw_cols=(1,)) if auto \
             else '<p class="na">No correction repeated across sessions in this sample.</p>'
     ri = S["aggregates"].get("repeated_instructions") or []
     if ri:
         body += "<h3>Instructions you repeat across sessions</h3><p class=\"sub\">Sentences that appear in two or more sessions: candidates for CLAUDE.md, a rule or a skill.</p>" + table(
-            ["Sessions", "Example", "Already in"], [[len(r["sessions"]), r["example"], ", ".join(r["possibly_covered_by"]) or "no agent file"] for r in ri])
+            ["Sessions", "Example", "Already in"], [[len(r["sessions"]), copy_cell(f"ri{i}", r["example"]), ", ".join(r["possibly_covered_by"]) or "no agent file"] for i, r in enumerate(ri)], raw_cols=(1,))
     body += "<h3>Rules and skills to rewrite, merge or remove</h3>"
     for i, r in enumerate(AF.get("rewrites", [])):
         body += (f'<div class="card"><b>{esc(r.get("path"))}</b> <span class="tag warn">{esc(r.get("action", "rewrite"))}</span>'
@@ -790,6 +859,7 @@ def p_models(S, I):
     body += "<h3>Sessions by task type</h3>" + bars([(t, d["sessions"], str(d["sessions"])) for t, d in A["by_task_type"].items()])
 
     body += spend_html(S, I)
+    body += context_html(S, I)
 
     body += "<h3>Tokens (measured)</h3><p class=\"sub\">Including subagents. The cost column is the list-price estimate above.</p>" + table(
         ["Model", "Sessions", "Input", "Output", "Cache read", "Cache write", "Est. cost"],
@@ -869,6 +939,89 @@ def spend_html(S, I) -> str:
         body += (f'<div class="card"><b>{esc(x.get("action"))}</b>'
                  + (f'<p>{esc(x["why"])}</p>' if x.get("why") else "")
                  + (f'<p class="muted">Evidence: {esc(x["evidence"])}</p>' if x.get("evidence") else "") + "</div>")
+    return body
+
+
+CONTEXT_ADVICE = {
+    "high_baseline": ("Trim what loads at the start of every session: shorten CLAUDE.md (aim under 200 lines), move workflow-specific "
+                      "instructions into skills, disable unused MCP servers with /mcp and plugins with /plugin. Run /context to see the biggest items.",
+                      ["costs", "claude-md"]),
+    "long_lived_big": ("Split long work into stages: finish a task, then /clear (or /compact with instructions at a natural break) before the next. "
+                       "Let a subagent do the reading-heavy research.", ["context", "investigate"]),
+    "very_large": ("A context this large is slow, costly on every request and prone to context rot. Compact or clear earlier; consider "
+                   "/autocompact to compact sooner than the model limit.", ["autocompact", "context-window"]),
+    "no_hygiene": ("Use /clear between unrelated tasks, /compact with a focus at a natural break, or /rewind to drop a failed path.",
+                   ["context", "costs"]),
+    "correction_spiral": ("After two failed corrections, /clear and restart with a better first prompt that includes what you learned.",
+                          ["best-practices", "context"]),
+    "cache_cold": ("Coming back after the cache lifetime means the whole context is processed again. After a long break, /clear or start a "
+                   "new session rather than resuming a huge one, or /compact before you leave.", ["prompt-caching"]),
+    "switch_big": ("Each model has its own cache, so switching model or effort in a big context makes the next request re-read everything "
+                   "uncached. Choose model and effort at the start of the session.", ["prompt-caching"]),
+    "heavy_reads": ("Delegate big reads (logs, test output, many files, docs) to a subagent so only a summary enters your context, or filter "
+                    "the output with a hook.", ["investigate", "costs"]),
+}
+
+
+def fmt_window(n) -> str:
+    return f"{n // 1_000_000}M" if n >= 1_000_000 else f"{n // 1000}K"
+
+
+def context_html(S, I) -> str:
+    A = S["aggregates"].get("context") or {}
+    ses = [s for s in S.get("sessions", []) if s.get("context")]
+    if not ses:
+        return ""
+    CW = I.get("context_window") or {}
+    body = "<h3>Context window</h3>"
+    body += ('<div class="callout"><b>How to read this.</b> Sizes are measured from each request\'s usage fields (input + cache read + cache write). '
+             'The flag thresholds are this tool\'s rules of thumb, not Anthropic limits. The report assumes a Claude subscription, where the prompt '
+             'cache of the main conversation lasts about 1 hour; on an API key or cloud provider it is 5 minutes by default, so idle gaps '
+             'cost more there and the cache numbers below understate your case. Sessions that were resumed start with their old history, so '
+             'startup size is judged by the lowest per project.' + source_links(["context-window", "prompt-caching"]) + '</div>')
+    if CW.get("headline"):
+        body += f'<div class="callout"><b>Summary.</b> {esc(CW["headline"])}</div>'
+    peaks = sorted((s["context"]["peak_tokens"] for s in ses))
+    base = sorted(s["context"]["baseline_tokens"] for s in ses)
+    facts = [(f'{peaks[len(peaks) // 2] // 1000}K', "median peak context"), (f'{peaks[-1] // 1000}K', "largest peak"),
+             (f'{base[0] // 1000}K', "lowest startup context"),
+             (str(sum(1 for s in ses if s["context"]["requests_above_200k"])), "sessions above 200K"),
+             (str(A.get("cold_restarts_total", 0)), "cache restarts after idle")]
+    body += '<dl class="facts">' + "".join(f"<div><dt>{esc(l)}</dt><dd>{esc(v)}</dd></div>" for v, l in facts) + "</dl>"
+    top = sorted(ses, key=lambda s: -s["context"]["peak_tokens"])[:10]
+    body += "<h4 style=\"margin-top:16px\">Peak context per session</h4><p class=\"sub\">Largest request in each session, in thousands of tokens, with the share of the model window. Top 10.</p>" + bars(
+        [(f'{s["id"][:8]} {s.get("project", "")}', s["context"]["peak_tokens"],
+          f'{s["context"]["peak_tokens"] // 1000}K' + (f' ({s["context"]["peak_pct_of_window"]:g}% of {fmt_window(s["context"]["window_tokens"])})'
+                                                    if s["context"].get("window_tokens") else "")) for s in top])
+    body += "<h4 style=\"margin-top:16px\">Per session</h4>" + table(
+        ["Session", "Peak", "Startup", "Requests above 200K", "Cache restarts", "/clear /compact /rewind", "Biggest tool result"],
+        [[sid(s["id"], s.get("title")), f'{s["context"]["peak_tokens"] // 1000}K', f'{s["context"]["baseline_tokens"] // 1000}K',
+          f'{s["context"]["requests_above_200k"]} of {s["context"]["requests"]}', s["context"]["cold_restart_count"],
+          " / ".join(str(s["context"]["hygiene_commands"][k]) for k in ("clear", "compact", "rewind")),
+          (f'{s["context"]["tool_result_tokens_top"][0]["tool"]} ~{s["context"]["tool_result_tokens_top"][0]["tokens"] // 1000}K'
+           if s["context"]["tool_result_tokens_top"] and s["context"]["tool_result_tokens_top"][0]["tokens"] >= 1000 else "-")]
+         for s in top], raw_cols=(0,))
+    body += "<h4 style=\"margin-top:16px\">What to change</h4>"
+    findings = CW.get("findings") or []
+    for i, f in enumerate(findings):
+        flag = next((x for x in A.get("flags", []) if x["key"] == f.get("flag")), None)
+        body += (f'<div class="card"><b>{esc(f.get("title") or (flag or {}).get("title") or f.get("flag"))}</b>'
+                 + (f' <span class="tag warn">{esc(flag["rule"])}</span>' if flag else "")
+                 + (f'<p class="muted">Evidence: {esc(f["evidence"])}</p>' if f.get("evidence") else "")
+                 + f'<p>{esc(f.get("advice"))}</p>' + (copybox(f"cwf{i}", f["copy"], "Paste into CLAUDE.md or your prompt") if f.get("copy") else "")
+                 + source_links(CONTEXT_ADVICE.get(f.get("flag"), ("", []))[1]) + "</div>")
+    covered = {f.get("flag") for f in findings}
+    for x in A.get("flags", []):
+        if x["key"] in covered:
+            continue
+        adv, srcs = CONTEXT_ADVICE.get(x["key"], ("", []))
+        ev = ", ".join(f"{str(k)[:8] if re.fullmatch(r'[0-9a-f-]{36}', str(k)) else k}: {v}" for k, v in list(x["evidence"].items())[:5]) if isinstance(x["evidence"], dict) else ""
+        body += (f'<div class="card"><b>{esc(x["title"])}</b> <span class="tag warn">flagged because: {esc(x["rule"])}</span>'
+                 f'<p class="muted">{len(x["sessions"])} session(s). {esc(ev)}</p><p>{esc(adv)}</p>{source_links(srcs)}</div>')
+    if not findings and not A.get("flags"):
+        body += '<p class="na">No context-window flags in this sample.</p>'
+    if CW.get("habits"):
+        body += "<h4 style=\"margin-top:16px\">Habits for you</h4>" + lst(CW["habits"], "check")
     return body
 
 

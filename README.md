@@ -20,7 +20,7 @@ apply in five minutes at the top of the first tab.
 | **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement), plan mode, staged delivery, verify loops, interview-first, hooks and more. Also up to 3 ready-to-send prompts from the [official Claude Code prompt library](https://code.claude.com/docs/en/prompt-library), filled in with your own project terms |
 | **Agent files** | Health of CLAUDE.md, AGENTS.md, rules, skills, commands and subagents; what exists on disk; instructions you repeat across sessions; a `/doctor prompt-audit` hint when files look stale |
 | **Hooks & permissions** | Hooks and allow/ask/deny rules in your settings files, tool calls you approved or rejected by hand, rules worth turning into hooks, allow rules worth adding |
-| **Models & cost** | Messages and tokens per model and effort level, estimated cost by model, task type, subagent type and workflow, the most expensive sessions and why, task-type vs model matrix, models that look too heavy or too light |
+| **Models & cost** | Messages and tokens per model and effort level, estimated cost by model, task type, subagent type and workflow, the most expensive sessions and why, context-window use (peak size, startup size, cache restarts after idle, missing /clear and /compact, with fixes; assumes a subscription's 1-hour cache), task-type vs model matrix, models that look too heavy or too light |
 | **Templates** | Reusable prompts for your most common task types: goal, context, constraints, approach, done-when |
 | **Action plan** | Do now / this month / ongoing, with links to Anthropic's own documentation |
 | **Method** | What was measured vs guessed, sample size, warnings and limits |
@@ -183,9 +183,9 @@ apm.yml                               package manifest
 .apm/skills/prompt-insights/
   SKILL.md                            the skill instructions
   scripts/                            analyze_sessions.py, build_report.py, pricing.py, subagents.py,
-                                      settings_scan.py, history.py, prompt_library.py, outdir.py, redact.py
+                                      settings_scan.py, history.py, outdir.py, redact.py
   references/                         report schema, prompting techniques, prompt library, model routing
-  assets/                             structural example of insights.json
+  assets/                             example-insights.json (structure only), prompt-library.json (official prompts)
 ```
 
 Validate a change before sending it:

@@ -1,0 +1,400 @@
+{
+  "library": {
+    "name": "Claude Code prompt library",
+    "url": "https://code.claude.com/docs/en/prompt-library",
+    "fetched": "2026-10-18",
+    "note": "Copied from the page; refresh when the library changes. {slots} are placeholders for the user's own terms."
+  },
+  "sources": {
+    "workflows": {
+      "label": "Common workflows",
+      "url": "https://code.claude.com/docs/en/common-workflows"
+    },
+    "best-practices": {
+      "label": "Best practices",
+      "url": "https://code.claude.com/docs/en/best-practices"
+    },
+    "teams": {
+      "label": "How Anthropic teams use Claude Code",
+      "url": null
+    },
+    "legal": {
+      "label": "How Anthropic uses Claude in Legal",
+      "url": null
+    },
+    "cybersecurity": {
+      "label": "How Anthropic uses Claude in Cybersecurity",
+      "url": null
+    },
+    "ebook": {
+      "label": "Scaling agentic coding guide",
+      "url": null
+    }
+  },
+  "prompts": [
+    {
+      "id": "get-oriented-in-a",
+      "phase": "discover",
+      "category": "Onboard",
+      "source": "workflows",
+      "prompt": "give me an overview of this codebase: architecture, key directories, and how the pieces connect"
+    },
+    {
+      "id": "explain-unfamiliar-code",
+      "phase": "discover",
+      "category": "Understand",
+      "source": "workflows",
+      "prompt": "explain what {path} does and how data flows through it. write it up as {format}"
+    },
+    {
+      "id": "find-where-something-happens",
+      "phase": "discover",
+      "category": "Understand",
+      "source": "workflows",
+      "prompt": "where do we {behavior}?"
+    },
+    {
+      "id": "see-what-depends-on",
+      "phase": "discover",
+      "category": "Understand",
+      "source": "workflows",
+      "prompt": "what would break if I deleted {target}?"
+    },
+    {
+      "id": "trace-how-code-evolved",
+      "phase": "discover",
+      "category": "Understand",
+      "source": "best-practices",
+      "prompt": "look through the commit history of {path} and summarize how it evolved and why"
+    },
+    {
+      "id": "scope-a-change-before",
+      "phase": "discover",
+      "category": "Understand",
+      "source": "teams",
+      "prompt": "which files would I need to touch to {change}?"
+    },
+    {
+      "id": "ask-the-codebase-a",
+      "phase": "discover",
+      "category": "Understand",
+      "source": "teams",
+      "prompt": "I am a {role}. walk me through what happens when a user {action}, from the UI down to the result"
+    },
+    {
+      "id": "plan-a-multi-file",
+      "phase": "design",
+      "category": "Plan",
+      "source": "workflows",
+      "prompt": "plan how to refactor the {target} to {goal}. list the files you would change, but don't edit anything yet"
+    },
+    {
+      "id": "draft-a-spec-by",
+      "phase": "design",
+      "category": "Plan",
+      "source": "best-practices",
+      "prompt": "I want to build {feature}. interview me about implementation, UX, edge cases, and tradeoffs until we have covered everything, then write the spec to SPEC.md"
+    },
+    {
+      "id": "turn-a-meeting-into",
+      "phase": "design",
+      "category": "Plan",
+      "source": "teams",
+      "prompt": "read {input} and write up the action items, then create a ticket in {tracker} for each one, with acceptance criteria"
+    },
+    {
+      "id": "map-edge-cases-before",
+      "phase": "design",
+      "category": "Plan",
+      "source": "teams",
+      "prompt": "list the error states, empty states, and edge cases for {feature} that the design needs to cover"
+    },
+    {
+      "id": "turn-a-mockup-into",
+      "phase": "design",
+      "category": "Prototype",
+      "source": "teams",
+      "prompt": "here is a mockup. build a working prototype I can click through, matching the layout and states shown"
+    },
+    {
+      "id": "implement-from-a-screenshot",
+      "phase": "design",
+      "category": "Prototype",
+      "source": "best-practices",
+      "prompt": "implement this design, then take a screenshot of the result, compare it to the original, and fix any differences"
+    },
+    {
+      "id": "follow-an-existing-pattern",
+      "phase": "build",
+      "category": "Implement",
+      "source": "best-practices",
+      "prompt": "look at how {example} is implemented to understand the pattern, then build {new} the same way"
+    },
+    {
+      "id": "generate-docs-for-code",
+      "phase": "build",
+      "category": "Implement",
+      "source": "workflows",
+      "prompt": "find {scope} without {format} comments and add them, matching the style already used in the file"
+    },
+    {
+      "id": "add-a-small-well",
+      "phase": "build",
+      "category": "Implement",
+      "source": "workflows",
+      "prompt": "add a {endpoint} endpoint that returns {payload}"
+    },
+    {
+      "id": "build-a-small-internal",
+      "phase": "build",
+      "category": "Implement",
+      "source": "teams",
+      "prompt": "create a {tool} using HTML, CSS, and vanilla JavaScript, then open it in my browser"
+    },
+    {
+      "id": "work-an-issue-end",
+      "phase": "build",
+      "category": "Implement",
+      "source": "workflows",
+      "prompt": "read issue #{issue}, implement the fix, and run the tests"
+    },
+    {
+      "id": "find-and-update-copy",
+      "phase": "build",
+      "category": "Implement",
+      "source": "teams",
+      "prompt": "find every place we say \"{copy}\" or a close variant, show me each one in context, then update them all to \"{new}\". leave tests and the changelog alone"
+    },
+    {
+      "id": "draft-from-past-examples",
+      "phase": "build",
+      "category": "Implement",
+      "source": "legal",
+      "prompt": "read the {examples} in {folder} to learn the structure and voice, then draft a new one for {topic}"
+    },
+    {
+      "id": "write-tests-run-them",
+      "phase": "build",
+      "category": "Test",
+      "source": "workflows",
+      "prompt": "write tests for {path}, run them, and fix any failures"
+    },
+    {
+      "id": "drive-implementation-from-tests",
+      "phase": "build",
+      "category": "Test",
+      "source": "ebook",
+      "prompt": "write tests for {feature} first, then implement it until they pass"
+    },
+    {
+      "id": "fill-gaps-from-a",
+      "phase": "build",
+      "category": "Test",
+      "source": "workflows",
+      "prompt": "read {report} and add tests for the lowest-covered files until each is above {target}%"
+    },
+    {
+      "id": "migrate-a-pattern-across",
+      "phase": "build",
+      "category": "Refactor",
+      "source": "workflows",
+      "prompt": "migrate everything from {from} to {to}: identify every place that needs to change, then make the changes"
+    },
+    {
+      "id": "port-code-between-languages",
+      "phase": "build",
+      "category": "Refactor",
+      "source": "teams",
+      "prompt": "port {source} to {target}, keeping the same {keep}"
+    },
+    {
+      "id": "optimize-against-a-measurable",
+      "phase": "build",
+      "category": "Refactor",
+      "source": "ebook",
+      "prompt": "optimize {target} to bring {metric} from {current} down to under {goal}"
+    },
+    {
+      "id": "fix-a-precise-visual",
+      "phase": "build",
+      "category": "Refactor",
+      "source": "ebook",
+      "prompt": "the {element} extends {amount} beyond the {container} on {viewport}. fix it."
+    },
+    {
+      "id": "review-your-changes-before",
+      "phase": "build",
+      "category": "Review",
+      "source": "workflows",
+      "prompt": "review my uncommitted changes and flag anything that looks risky before I commit"
+    },
+    {
+      "id": "review-a-pull-request",
+      "phase": "build",
+      "category": "Review",
+      "source": "workflows",
+      "prompt": "review PR #{pr} and summarize what changed, then list any concerns"
+    },
+    {
+      "id": "review-infrastructure-changes-before",
+      "phase": "build",
+      "category": "Review",
+      "source": "teams",
+      "prompt": "here is my Terraform plan output. what is this going to do, and is anything here going to cause problems?"
+    },
+    {
+      "id": "run-a-security-review",
+      "phase": "build",
+      "category": "Review",
+      "source": "best-practices",
+      "prompt": "use a subagent to review {path} for security issues and report what it finds"
+    },
+    {
+      "id": "review-content-before-sending",
+      "phase": "build",
+      "category": "Review",
+      "source": "legal",
+      "prompt": "review {file} for {concerns} and list anything I should fix before it goes to {reviewer}"
+    },
+    {
+      "id": "course-correct-a-wrong",
+      "phase": "build",
+      "category": "Steer",
+      "source": "best-practices",
+      "prompt": "that is not right: {feedback}. try a different approach"
+    },
+    {
+      "id": "narrow-the-scope-of",
+      "phase": "build",
+      "category": "Steer",
+      "source": "best-practices",
+      "prompt": "that is too much. keep only the changes to {scope} and undo your other edits"
+    },
+    {
+      "id": "turn-a-correction-into",
+      "phase": "build",
+      "category": "Steer",
+      "source": "best-practices",
+      "prompt": "you keep {mistake}. add a rule to CLAUDE.md so this stops happening"
+    },
+    {
+      "id": "resolve-merge-conflicts",
+      "phase": "ship",
+      "category": "Git",
+      "source": "workflows",
+      "prompt": "resolve the merge conflicts in this branch and explain what you kept from each side"
+    },
+    {
+      "id": "commit-with-a-generated",
+      "phase": "ship",
+      "category": "Git",
+      "source": "workflows",
+      "prompt": "commit these changes with a message that summarizes what I did"
+    },
+    {
+      "id": "open-a-pull-request",
+      "phase": "ship",
+      "category": "Git",
+      "source": "workflows",
+      "prompt": "find the ticket about {topic} in {tracker} and open a PR that implements it"
+    },
+    {
+      "id": "draft-release-notes-from",
+      "phase": "ship",
+      "category": "Release",
+      "source": "workflows",
+      "prompt": "compare {from} to {to} and draft release notes grouped by feature, fix, and breaking change"
+    },
+    {
+      "id": "write-a-ci-workflow",
+      "phase": "ship",
+      "category": "Release",
+      "source": "workflows",
+      "prompt": "write a GitHub Actions workflow that {steps} on every push to {branch}"
+    },
+    {
+      "id": "find-and-fix-a",
+      "phase": "operate",
+      "category": "Debug",
+      "source": "workflows",
+      "prompt": "the {test} test is failing, find out why and fix it"
+    },
+    {
+      "id": "investigate-a-reported-error",
+      "phase": "operate",
+      "category": "Debug",
+      "source": "workflows",
+      "prompt": "users are seeing {symptom} on {where}. investigate and tell me what is going on"
+    },
+    {
+      "id": "fix-a-build-error",
+      "phase": "operate",
+      "category": "Debug",
+      "source": "best-practices",
+      "prompt": "here is a build error. fix the root cause and verify the build succeeds"
+    },
+    {
+      "id": "investigate-a-production-incident",
+      "phase": "operate",
+      "category": "Incident",
+      "source": "workflows",
+      "prompt": "{symptom}. check the logs, recent deploys, and config changes, then tell me the most likely cause"
+    },
+    {
+      "id": "diagnose-from-a-console",
+      "phase": "operate",
+      "category": "Incident",
+      "source": "teams",
+      "prompt": "here is a screenshot of {console}. walk me through why {resource} is failing and give me the exact commands to fix it"
+    },
+    {
+      "id": "query-logs-in-plain",
+      "phase": "operate",
+      "category": "Incident",
+      "source": "cybersecurity",
+      "prompt": "show me all {events} for {scope} over {timeframe}. write the query, run it, and tell me what stands out"
+    },
+    {
+      "id": "analyze-a-data-file",
+      "phase": "operate",
+      "category": "Data",
+      "source": "teams",
+      "prompt": "read {file}, summarize the key patterns, and write the results to {output}"
+    },
+    {
+      "id": "generate-variations-from-performance",
+      "phase": "operate",
+      "category": "Data",
+      "source": "teams",
+      "prompt": "read {file}, find the underperforming {items}, and generate {n} new variations that stay under {limit} characters"
+    },
+    {
+      "id": "turn-a-recurring-task",
+      "phase": "operate",
+      "category": "Automate",
+      "source": "workflows",
+      "prompt": "create a /{name} skill for this project that {steps}"
+    },
+    {
+      "id": "add-a-hook-for",
+      "phase": "operate",
+      "category": "Automate",
+      "source": "best-practices",
+      "prompt": "write a hook that {action} after every {event}"
+    },
+    {
+      "id": "connect-a-tool-with",
+      "phase": "operate",
+      "category": "Automate",
+      "source": "workflows",
+      "prompt": "connect {server} via MCP so you can read its {data} directly"
+    },
+    {
+      "id": "capture-what-to-remember",
+      "phase": "operate",
+      "category": "Automate",
+      "source": "teams",
+      "prompt": "summarize what we did this session and suggest what to add to CLAUDE.md"
+    }
+  ]
+}

@@ -66,7 +66,7 @@ customer names. Keep quotes short.
 
   "official_prompts": [
     {
-      "id": "id from scripts/prompt_library.py, for example plan-a-multi-file",
+      "id": "id from assets/prompt-library.json, for example plan-a-multi-file",
       "why_for_you": "evidence from the user's sessions (session id or number)",
       "prompt": "the library prompt with its {slots} filled in with the user's own terms",
       "evidence_sessions": ["..."]
@@ -105,6 +105,17 @@ customer names. Keep quotes short.
   "spend": {
     "headline": "one or two sentences on what drives the estimated cost, with numbers from aggregates.cost",
     "savings": [{"action": "a change the user can make", "why": "the driver it reduces", "evidence": "session ids / numbers"}]
+  },
+
+  "context_window": {
+    "headline": "one or two sentences: how the user uses the context window, with numbers from aggregates.context",
+    "findings": [
+      {"flag": "key from aggregates.context.flags, or 'kitchen_sink' for your own judgment",
+       "title": "", "evidence": "session ids and numbers from sessions[].context",
+       "advice": "what to do differently, in the user's terms",
+       "copy": "optional text to paste, e.g. a '# Compact instructions' block for CLAUDE.md or a prompt"}
+    ],
+    "habits": ["short, specific habits that fit this user's data; each from references/context-window.md"]
   },
 
   "permissions": {
@@ -164,7 +175,7 @@ customer names. Keep quotes short.
 - **Techniques**: 1 to 3, chosen with `references/prompting-techniques.md`; at least one when any
   weakness is about scope, task size, missing checks or unfamiliar code.
 - **Official prompts**: 0 to 3, chosen with `references/prompt-library.md`. The `id` must exist in
-  `scripts/prompt_library.py`; the builder skips unknown ids with a warning. Each needs `why_for_you`
+  `assets/prompt-library.json`; the builder skips unknown ids with a warning. Each needs `why_for_you`
   with evidence. Optional: leave the list out when nothing in the sessions fits.
 - **Templates**: 3 to 5, one per most common task type in `aggregates.by_task_type` (use the
   corrected labels). Fill all five fields; `<placeholders>` only for what you cannot know.
@@ -181,6 +192,10 @@ customer names. Keep quotes short.
   you write says so ("about $12 at API list prices"); never call it the user's spend or bill. Only
   quote figures from `aggregates.cost` or `sessions[].cost`. `claude_code_reported_usd` is a
   cross-check, not a second answer.
+- **Context window**: read `references/context-window.md` first. Confirm each automatic flag against the
+  session (`--show`) before keeping it, drop false ones, and add `kitchen_sink` yourself when one session
+  mixes unrelated goals. Sizes are measured; thresholds are rules of thumb, so say "flagged because ...".
+  Never claim a quality loss: say the context was large, not that answers got worse.
 - **Hooks**: use `enforcement: "hook"` only for rules a command can check or carry out (formatting,
   tests, blocking edits to a path). Write `hook.command` so it works as a `"type": "command"` hook;
   the report renders the settings.json block. Judgment calls stay in CLAUDE.md or a skill.

@@ -124,6 +124,9 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
      missing references, reports proposed edits, and changes nothing until approved. It needs Claude
      Code v2.1.283 or later (check `meta.claude_code_versions`). The report shows this hint
      automatically on the Agent files tab; also put it in the `action_plan` with the file to audit.
+   - *Context window:* read `references/context-window.md`, then check `aggregates.context.flags` and
+     `sessions[].context` (peak, baseline, cold-cache gaps, hygiene commands). Confirm flags with `--show`,
+     then fill `context_window` in insights.json.
    - *Models and effort:* read `references/model-routing.md`, then judge `by_model`, `by_effort`,
      `task_model_matrix` and `model_mismatch_candidates` (a starting list: also scan short sessions
      on the strongest tier yourself). Compare within a task type only. Subagent and workflow agents
@@ -219,6 +222,9 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
 - `scripts/history.py`: report snapshots and the follow-up comparison.
 - `references/insights-schema.md`: the exact `insights.json` shape, writing rules and source ids.
 - `references/prompting-techniques.md`: RPI and other techniques, and how to match them to the data.
-- `references/prompt-library.md` and `scripts/prompt_library.py`: official Claude Code prompts and how to match them to the data.
+- `references/prompt-library.md` and `assets/prompt-library.json`: official Claude Code prompts and how to match them to the data.
 - `references/model-routing.md`: how to judge model fit; read before the model section.
+- `references/context-window.md`: context-window knowledge base and thresholds; read before the context section.
+- `scripts/context.py`: context-window measurements and flags used by the analyzer.
 - `assets/example-insights.json`: structural example only.
+- `assets/prompt-library.json`: the official prompt library data (copied from the docs page, with the origin of each prompt).
