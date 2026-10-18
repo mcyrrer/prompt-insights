@@ -13,13 +13,17 @@ sessions actually contain, and tell the user to re-check the current list with `
 
 ## What the data can and cannot tell you
 
-- **Measured:** model per assistant message, switches, `/model` commands, tokens per model,
-  subagent models, turns, tool errors, interruptions.
-- **Heuristic:** task type, corrections, friction score, mismatch candidates.
-- **Not measured:** models used by subagents (their transcripts are separate files), so
-  `subagent_model_msgs` is empty; say so rather than inferring worker models.
-- **Not measurable from transcripts:** true quality, wall-clock latency, billed cost. Cost is only
-  estimated if the user supplied `--prices`; say "n/a" otherwise.
+- **Measured:** model and effort level per assistant message, switches, `/model` and `/effort`
+  commands, tokens per model, turns, tool errors, interruptions, rejected tool calls. Subagents
+  and workflow agents are read from their own transcripts (`<session-id>/subagents/`), so
+  `subagent_model_msgs` and `cost.by_subagent_type` show which model and effort each agent type
+  ran on, how often, and roughly what it cost.
+- **Estimated:** cost. Measured tokens are priced at Claude API list prices from
+  https://platform.claude.com/docs/en/about-claude/pricing (`scripts/pricing.py`). It is not the
+  user's bill; a subscription or discounts change what they pay. Always call it an estimate.
+- **Heuristic:** task type, corrections, friction score, mismatch candidates, cost drivers.
+- **Not measurable from transcripts:** true quality, billed cost, background requests Claude Code
+  does not write to the transcript.
 
 ## Procedure
 
@@ -35,8 +39,18 @@ sessions actually contain, and tell the user to re-check the current list with `
    - **Planning vs execution:** was a stronger model used for planning and a faster one for
      implementation? If the user's Claude Code version offers a plan-mode hybrid alias (check
      `/model`), mention it as an option rather than assuming it exists.
-   - **Subagents** (`subagent_model_msgs`, `subagents_used`): exploration and search subagents are
-     good candidates for a faster tier.
+   - **Subagents** (`cost.by_subagent_type`, `cost.workflows`): an agent type that runs dozens of
+     times on the strongest tier (critics, reviewers, explorers) is usually the largest saving.
+     Exploration and search agents are good candidates for a faster tier; critics that decide
+     whether work passes may need the strong tier but rarely high effort. Check `tool_errors` per
+     type before downgrading.
+   - **Effort** (`by_effort`, `primary_effort`, matrix `efforts`): high or xhigh effort on short,
+     uncorrected sessions is the effort version of "heavy model on trivial work". Low effort on
+     sessions with strong corrections may be too little thinking. Recommend effort per task type in
+     `guide[].effort`.
+   - **Cost drivers** (`cost.top_sessions[].drivers`): many cache writes point at context rebuilt
+     often (long sessions, resumes, compactions); large cache reads at a big context re-read every
+     turn (`/clear` or a handoff helps); subagent share at delegation patterns.
 5. Write one `guide` row per task type that appears in the sample. If a task type has no usable
    data, still recommend a tier from the table above and write `evidence: "no data in sample"`.
 6. Add 3 to 6 `rules_of_thumb`, concrete and tied to the user's habits (for example "start infra

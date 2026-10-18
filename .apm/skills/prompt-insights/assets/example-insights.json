@@ -5,8 +5,10 @@
     "why": "Example: 4 of 6 first prompts name no check, and 3 sessions needed a follow-up to ask for one.",
     "do_this": "Done when <command> passes and I can see <result>.",
     "minutes": 2,
-    "evidence": "Example: s1, s2"
+    "evidence": "Example: s1, s2",
+    "metric": "has_done_criteria"
   },
+  "followup_note": "Example: since the last report, 2 of 3 first prompts named a done check (was 1 of 9); early sign only.",
   "headline_insights": [
     "Example: 6 of 20 sessions contain a strong correction, mostly about scope.",
     "Example: first prompts rarely say how to verify the result."
@@ -112,6 +114,19 @@
         "occurrences": 2,
         "target_file": "CLAUDE.md",
         "proposed_line": "Never change the inputs of the reusable workflow in ./shared/."
+      },
+      {
+        "theme": "Example: run the formatter after every edit",
+        "occurrences": 3,
+        "target_file": "hook",
+        "proposed_line": "",
+        "enforcement": "hook",
+        "hook": {
+          "event": "PostToolUse",
+          "matcher": "Edit|Write",
+          "command": "<formatter command for the edited file>",
+          "why": "Example: formatting was corrected in 3 sessions although CLAUDE.md asks for it."
+        }
       }
     ],
     "rewrites": [
@@ -141,11 +156,34 @@
         "task_type": "exploration",
         "recommended": "fast tier",
         "why": "short lookups",
-        "evidence": "no data in sample"
+        "evidence": "no data in sample",
+        "effort": "low"
       }
     ],
     "rules_of_thumb": [
       "Example: switch with /model before pasting a long planning prompt."
+    ]
+  },
+  "spend": {
+    "headline": "Example: about $40 at API list prices (an estimate, not your bill); 70% came from one critic agent type.",
+    "savings": [
+      {
+        "action": "Example: run the critic on the balanced tier at medium effort",
+        "why": "Example: it ran 90 times on the strongest tier at high effort",
+        "evidence": "Example: cost.by_subagent_type, sessions s1, s2"
+      }
+    ]
+  },
+  "permissions": {
+    "findings": [
+      "Example: 12 manual approvals of the same test command in 4 sessions."
+    ],
+    "allow_rules": [
+      {
+        "rule": "Bash(npm run test *)",
+        "why": "Example: approved by hand 12 times",
+        "target": ".claude/settings.json"
+      }
     ]
   },
   "templates": [
@@ -158,7 +196,8 @@
       "context": "<files, versions, failing log line>",
       "constraints": "<what not to touch>",
       "approach": "Explain the cause from the logs first, then fix",
-      "done_when": "<command that must pass>"
+      "done_when": "<command that must pass>",
+      "recommended_effort": "medium"
     }
   ],
   "action_plan": {

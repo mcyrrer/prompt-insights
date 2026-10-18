@@ -10,7 +10,8 @@ Modes
 
 Everything it reports is either MEASURED (counts, tokens, timestamps, tool calls) or a
 HEURISTIC (task type, correction flags, prompt-quality flags). Heuristics are candidates
-for the model to confirm, not conclusions.
+for the model to confirm, not conclusions. Costs are ESTIMATES: measured token counts priced
+at the list prices in pricing.py, never the user's real bill.
 """
 from __future__ import annotations
 
@@ -26,10 +27,14 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep the installed skill folder free of __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from history import find_previous, followup  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
+from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL, context_tokens, price_usage  # noqa: E402
 from redact import compile_extra, redact, tilde, truncate  # noqa: E402
+from settings_scan import scan_settings  # noqa: E402
+from subagents import CHECK_RE, EDIT_TOOLS, read_subagents, summarize  # noqa: E402
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACTIVE_GAP_S = 300
 INTERRUPT_PREFIX = "[Request interrupted by user"
 INJECTED_PREFIXES = (
@@ -70,6 +75,11 @@ WRITE_BEFORE_RE = re.compile(
     r"(?:>>?|\btee\b(?:\s+-a)?|\bsed\s+-i\S*(?:\s+(?:'[^']*'|\"[^\"]*\"|-e\s+\S+))*|\bcp\b(?:\s+-\S+)*(?:\s+\S+)?|\bmv\b(?:\s+-\S+)*(?:\s+\S+)?"
     r"|\bperl\s+-pi\S*(?:\s+'[^']*')?)\s*['\"]?$")
 BASH_WRITE_RE = re.compile(r"(sed\s+-i|>>|[^>]>[^>&]|\btee\b|cat\s*<<|\bmv\b|\bcp\b|\brm\b|\bperl\s+-pi)")
+COMMIT_RE = re.compile(r"\bgit\b[^|;&\n]*\bcommit\b")
+PUSH_RE = re.compile(r"\bgit\b[^|;&\n]*\bpush\b")
+PR_RE = re.compile(r"\bgh\s+pr\s+create\b")
+# Tools whose "approval" is the user answering a question or a plan, not a permission prompt.
+INTERACTIVE_TOOLS = {"AskUserQuestion", "ExitPlanMode", "EnterPlanMode"}
 ASKS_UPDATE_RE = re.compile(
     r"(?i)\b(update|add (this|that|it)|put (this|that|it)|remember|save)\b.{0,50}"
     r"(CLAUDE\.md|AGENTS\.md|\brules?\b|\bskills?\b|\bmemory\b|instructions)")
@@ -188,7 +198,8 @@ def classify_user(e, msg):
     """Return (kind, text, extra) for a non-sidechain user entry.
 
     kind: empty | interrupt | command | auto | human. Used by both the analyzer and --show
-    so that turn numbers always agree.
+    so that turn numbers always agree. Newer versions say where a prompt came from in
+    promptSource (typed, queued, sdk, system); older ones are recognised by their prefixes.
     """
     text = text_of(msg.get("content")).strip()
     if not text:
@@ -200,8 +211,13 @@ def classify_user(e, msg):
         a = CMD_ARGS_RE.search(text)
         return "command", text, (m.group(1).lstrip("/"), (a.group(1).strip() if a else ""))
     origin = e.get("origin") if isinstance(e.get("origin"), dict) else {}
+    source = e.get("promptSource")
     if (origin.get("kind") and origin["kind"] != "human") or text.startswith(AUTO_PREFIXES):
         return "auto", text, origin.get("kind") or "other-session"
+    if source == "system":
+        return "auto", text, "system"
+    if source in ("typed", "queued", "sdk"):  # sdk: the desktop app sends what the user typed through the SDK
+        return "human", text, None
     if text.startswith(INJECTED_PREFIXES):
         return "auto", text, "injected"
     return "human", text, None
@@ -241,7 +257,7 @@ def add_agent_edit(store, path, tool, ts):
     rec["count"] += 1
 
 
-def parse_session(path: Path, extra, labels: dict) -> dict:
+def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagents=True) -> dict:
     sid = path.stem
     bad_lines = 0
     total_lines = 0
@@ -255,10 +271,20 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
     default_saved = 0
     slash = Counter()
     slash_models = []
+    slash_effort = []
     msgs = {}
     tools = {}
     err_ids = set()
     plan_mode = False
+    modes = Counter()
+    denials, denied_tools = Counter(), Counter()
+    approvals, approval_cmds, blocked = Counter(), Counter(), Counter()
+    compact_boundaries = compact_summaries = api_errors = 0
+    turn_ms = []
+    hooks = {"runs": 0, "errors": 0, "blocked_stop": 0}
+    title = custom_title = None
+    prs = 0
+    cost_state = None
 
     for e in iter_entries(path):
         total_lines += 1
@@ -279,12 +305,55 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
         side = bool(e.get("isSidechain"))
         msg = e.get("message") if isinstance(e.get("message"), dict) else {}
 
+        if t == "permission-mode" and e.get("permissionMode"):
+            modes[str(e["permissionMode"])] += 1
+            plan_mode = plan_mode or e["permissionMode"] == "plan"
+        elif t == "ai-title" and e.get("aiTitle"):
+            title = e["aiTitle"]
+        elif t == "custom-title" and e.get("customTitle"):
+            custom_title = e["customTitle"]
+        elif t == "pr-link":
+            prs += 1
+        elif t == "cost-state":
+            cost_state = e
+        elif t == "system":
+            st = e.get("subtype")
+            if st == "compact_boundary":
+                compact_boundaries += 1
+            elif st == "turn_duration" and isinstance(e.get("durationMs"), (int, float)):
+                turn_ms.append(e["durationMs"])
+            elif st == "api_error":
+                api_errors += 1
+            elif st == "stop_hook_summary":
+                hooks["runs"] += e.get("hookCount") or 1
+                hooks["errors"] += len(e["hookErrors"]) if isinstance(e.get("hookErrors"), list) else 0
+                hooks["blocked_stop"] += 1 if e.get("preventedContinuation") else 0
+
         if t == "user":
             content = msg.get("content")
-            if isinstance(content, list):
-                for b in content:
-                    if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
-                        err_ids.add(b.get("tool_use_id") or f"err{len(err_ids)}")
+            results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"] if isinstance(content, list) else []
+            for b in results:
+                if b.get("is_error"):
+                    err_ids.add(b.get("tool_use_id") or f"err{len(err_ids)}")
+            if results and not side:
+                names = [(tools.get(b.get("tool_use_id")) or {}).get("name") or "?" for b in results]
+                if e.get("toolDenialKind"):
+                    denials[str(e["toolDenialKind"])] += 1
+                    if e["toolDenialKind"] == "user-rejected":
+                        denied_tools.update(names)
+                pd = e.get("permissionDecision") if isinstance(e.get("permissionDecision"), dict) else {}
+                if str(pd.get("source", "")).startswith("user"):
+                    for b, n in zip(results, names):
+                        if n in INTERACTIVE_TOOLS:
+                            continue
+                        approvals[n] += 1
+                        if n == "Bash":
+                            cmd = str(((tools.get(b.get("tool_use_id")) or {}).get("input") or {}).get("command", ""))
+                            approval_cmds[" ".join(cmd.split()[:2])] += 1
+                elif pd.get("decision") == "reject":
+                    blocked[str(pd.get("reasonType") or pd.get("source") or "rule")] += 1
+            if e.get("isCompactSummary"):
+                compact_summaries += 1
             if side or e.get("isMeta") or e.get("isCompactSummary"):
                 continue
             kind, text, extra_ = classify_user(e, msg)
@@ -302,6 +371,9 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
                 if name == "model":
                     if args:
                         slash_models.append(truncate(args, 40))
+                elif name == "effort":
+                    if args:
+                        slash_effort.append(truncate(args, 20))
                 elif name not in BUILTIN_CMDS and args:
                     # a skill or custom command: the args are a prompt the user typed
                     typed.append({"text": args, "ts": ts, "via": "/" + name})
@@ -315,7 +387,7 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
             rec = msgs.get(mid)
             if rec is None or out >= rec["out"]:
                 msgs[mid] = {"model": msg.get("model"), "usage": usage, "out": out, "side": side,
-                             "order": len(msgs) if rec is None else rec["order"]}
+                             "effort": e.get("effort"), "order": len(msgs) if rec is None else rec["order"]}
             content = msg.get("content")
             if isinstance(content, list):
                 for b in content:
@@ -330,6 +402,9 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
             if m["model"] and not str(m["model"]).startswith("<")]
     main = [m for m in real if not m["side"]]
     fam_msgs, sub_models, tokens, model_ids = Counter(), Counter(), defaultdict(Counter), defaultdict(set)
+    cost_by_model, parts, effort = Counter(), Counter(), Counter()
+    main_cost = side_cost = 0.0
+    unpriced = peak = 0
     for m in real:
         f = family(m["model"])
         model_ids[f].add(m["model"])
@@ -339,10 +414,22 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
         tk["output"] += u.get("output_tokens") or 0
         tk["cache_read"] += u.get("cache_read_input_tokens") or 0
         tk["cache_write"] += u.get("cache_creation_input_tokens") or 0
+        p = price_usage(m["model"], u, overrides)
+        c = sum(p.values()) if p else 0.0
+        if p is None:
+            unpriced += 1
+        else:
+            parts.update(p)
+            cost_by_model[f] += c
         if m["side"]:
             sub_models[f] += 1
+            side_cost += c
         else:
             fam_msgs[f] += 1
+            main_cost += c
+            peak = max(peak, context_tokens(u))
+            if m["effort"]:
+                effort[str(m["effort"])] += 1
     switches, prev = [], None
     for m in main:
         if prev and m["model"] != prev:
@@ -355,18 +442,28 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
     bash_writes = 0
     skills, subagents = Counter(), Counter()
     exit_plan = False
-    for tl in tools.values():
+    last_edit, checks = None, []
+    committed = pushed = pr_cmds = 0
+    for tid, tl in tools.items():
         name, inp = tl["name"], tl["input"]
         if not tl["side"]:
             tool_counts[name] += 1
         fp = inp.get("file_path") or inp.get("path") or inp.get("notebook_path")
-        if name in ("Edit", "Write", "MultiEdit", "NotebookEdit") and fp:
+        if name in EDIT_TOOLS and fp:
             if not tl["side"]:
                 edited.add(fp)
+                if tl["ts"] and (last_edit is None or tl["ts"] > last_edit):
+                    last_edit = tl["ts"]
             if AGENT_FILE_RE.search(str(fp)):
                 add_agent_edit(agent_edits, norm_agent_path(str(fp), cwd_main), name, tl["ts"])
         elif name == "Bash":
             cmd = str(inp.get("command", ""))
+            if not tl["side"]:
+                if CHECK_RE.search(cmd):
+                    checks.append((tl["ts"], tid not in err_ids))
+                committed += bool(COMMIT_RE.search(cmd))
+                pushed += bool(PUSH_RE.search(cmd))
+                pr_cmds += bool(PR_RE.search(cmd))
             if BASH_WRITE_RE.search(cmd):
                 if not tl["side"]:
                     bash_writes += 1
@@ -414,7 +511,8 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
     n_turns = len(texts)
     strong = sum(1 for c in corrections if c["strength"] == "strong")
     weak = len(corrections) - strong
-    friction = strong * 2 + weak * 0.5 + interruptions * 1.5 + repeat_pairs * 2
+    rejected = denials.get("user-rejected", 0)  # the user said no to a tool call: a correction without words
+    friction = strong * 2 + weak * 0.5 + interruptions * 1.5 + repeat_pairs * 2 + rejected * 1.5
     substantive = [x for x in texts if len(x.split()) >= 4]
     task = labels.get(sid) or classify_task(substantive or texts)
 
@@ -427,6 +525,42 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
     cwd = cwd_counter.most_common(1)[0][0] if cwd_counter else None
     primary = fam_msgs.most_common(1)[0][0] if fam_msgs else None
 
+    # --- subagent and workflow transcripts in <session-id>/subagents/
+    sub = summarize(read_subagents(path, overrides), family) if with_subagents else summarize([], family)
+    for f, msgs_n in sub_models.items():  # older versions: subagent messages inline as sidechain entries
+        sub["models"][f] = sub["models"].get(f, 0) + msgs_n
+    sub_cost = sub["cost_usd"] + side_cost
+
+    # --- how the session ended: did a check pass after the last edit (here or in a subagent)?
+    sub_last = parse_ts(sub.pop("_last_edit"))
+    sub_checks = [(parse_ts(ts), ok) for ts, ok in sub.pop("_checks")]
+    edits_at = [x for x in (last_edit, sub_last) if x]
+    final_edit = max(edits_at) if edits_at else None
+    all_checks = [c for c in checks + sub_checks if c[0]]
+    verified = None
+    if final_edit:
+        verified = any(ok and ts >= final_edit for ts, ok in all_checks)
+    outcome = {"edited": bool(final_edit), "checks_run": len(all_checks),
+               "checks_after_last_edit": sum(1 for ts, _ in all_checks if final_edit and ts >= final_edit),
+               "verified_finish": verified, "committed": committed > 0, "pushed": pushed > 0,
+               "prs": max(prs, pr_cmds)}
+
+    total_parts = Counter(parts)
+    total_parts.update(sub["cost_parts"])
+    cs = cost_state if isinstance(cost_state, dict) else {}
+    cost = {"total_usd": round(main_cost + sub_cost, 4), "main_usd": round(main_cost, 4), "subagent_usd": round(sub_cost, 4),
+            "by_model": {k: round(v + sub["cost_by_model"].get(k, 0), 4) for k, v in (cost_by_model + Counter()).items()},
+            "parts": {k: round(v, 4) for k, v in total_parts.items()},
+            "unpriced_msgs": unpriced + sub["unpriced_msgs"],
+            "claude_code_reported_usd": round(cs["totalCostUSD"], 4) if isinstance(cs.get("totalCostUSD"), (int, float)) else None}
+    for k, v in sub["cost_by_model"].items():
+        cost["by_model"].setdefault(k, round(v, 4))
+    for f, tk in sub["tokens"].items():  # tokens and model ids include subagents, like the cost
+        for k, v in tk.items():
+            tokens[f][k] += v
+    for f, ids in sub.pop("model_ids").items():
+        model_ids[f].update(ids)
+
     return {
         "id": sid,
         "session_id": sid,
@@ -438,6 +572,7 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
         "duration_min": round((ts_all[-1] - ts_all[0]).total_seconds() / 60, 1) if len(ts_all) > 1 else 0,
         "active_min": round(active / 60, 1),
         "claude_code_version": versions.most_common(1)[0][0] if versions else None,
+        "title": redact(truncate(custom_title or title, 80), extra) if (custom_title or title) else None,
         "user_turns": n_turns,
         "assistant_msgs": len(main),
         "first_prompt": redact(truncate(texts[first_idx], 400), extra) if texts else None,
@@ -456,8 +591,14 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
         "model_switches": switches[:10],
         "slash_model_commands": slash_models,
         "model_default_saved": default_saved,
-        "subagent_models": dict(sub_models),
+        "effort": dict(effort),
+        "primary_effort": effort.most_common(1)[0][0] if effort else None,
+        "slash_effort_commands": slash_effort,
+        "subagent_models": sub["models"],
+        "subagents": sub,
         "tokens": {k: dict(v) for k, v in tokens.items()},
+        "cost": cost,
+        "peak_context_tokens": peak,
         "tool_counts": dict(tool_counts.most_common(10)),
         "tool_calls": sum(tool_counts.values()),
         "tool_errors": len(err_ids),
@@ -465,6 +606,20 @@ def parse_session(path: Path, extra, labels: dict) -> dict:
         "bash_write_commands": bash_writes,
         "plan_mode_used": plan_mode or exit_plan,
         "interruptions": interruptions,
+        "rejected_tool_calls": rejected,
+        "tool_denials": dict(denials),
+        "rejected_tools": dict(denied_tools),
+        "manual_approvals": dict(approvals),
+        "manual_approval_commands": {redact(k, extra): v for k, v in approval_cmds.most_common(10)},
+        "blocked_by_policy": dict(blocked),
+        "permission_modes": dict(modes),
+        "compactions": max(compact_boundaries, compact_summaries),
+        "turn_seconds": {"turns": len(turn_ms), "median": round(sorted(turn_ms)[len(turn_ms) // 2] / 1000, 1),
+                         "max": round(max(turn_ms) / 1000, 1)} if turn_ms else None,
+        "api_errors": api_errors,
+        "hooks": hooks,
+        "outcome": outcome,
+        "lines_changed": {"added": cs.get("totalLinesAdded"), "removed": cs.get("totalLinesRemoved")} if cs else None,
         "corrections": corrections[:12],
         "corrections_strong": strong,
         "corrections_weak": weak,
@@ -584,6 +739,9 @@ def build_inventory(sessions, scoped=False, used=frozenset()):
         proj_cwd = next((c for c in cwd_set if project_name(c) == scope), None)
         relevant = cwd_set.get(proj_cwd, []) if proj_cwd else [s for ss in cwd_set.values() for s in ss]
         after = sum(1 for s in relevant if s["_start"] and s["_start"] > mtime)
+        sp = str(rp)
+        linked = scope == "global" and not sp.startswith(str(home / ".claude")) and not sp.startswith(("/opt/", "/usr/"))
+        managed = sp.startswith(("/opt/", "/usr/")) or "/plugins/" in sp or "node_modules" in sp
         hints = []
         if (lines > 200 or st.st_size > 12_000) and not managed:
             hints.append("bloated?")
@@ -594,9 +752,6 @@ def build_inventory(sessions, scoped=False, used=frozenset()):
             hints.append("untouched-90d+")
         bases = [rp.parent, Path(proj_cwd) if proj_cwd else None, home]
         refs = dead_refs(text, bases)
-        sp = str(rp)
-        linked = scope == "global" and not sp.startswith(str(home / ".claude")) and not sp.startswith(("/opt/", "/usr/"))
-        managed = sp.startswith(("/opt/", "/usr/")) or "/plugins/" in sp or "node_modules" in sp
         entry = {
             "managed": managed, "linked_from_project": linked,
             "path": tilde(str(rp)), "kind": kind, "scope": "plugin" if managed else scope,
@@ -663,13 +818,30 @@ def project_name(cwd: str) -> str:
 
 # ----------------------------------------------------------------------------- aggregation
 
-def est_cost(fam, ids, tk, prices):
-    for key, p in (prices or {}).items():
-        k = key.lower()
-        if k in fam or any(k in i.lower() for i in ids):
-            return round((tk["input"] * p.get("input", 0) + tk["output"] * p.get("output", 0)
-                          + tk["cache_read"] * p.get("cache_read", 0) + tk["cache_write"] * p.get("cache_write", 0)) / 1e6, 4)
-    return None
+def cost_drivers(s) -> list:
+    """Plain-language reasons a session cost what it did (largest shares first)."""
+    c = s["cost"]
+    tot = c["total_usd"] or 0
+    if tot <= 0:
+        return []
+    out = []
+    if c["subagent_usd"] / tot >= 0.4:
+        bt = s["subagents"]["by_type"]
+        top = max(bt.items(), key=lambda kv: kv[1]["cost_usd"]) if bt else None
+        out.append(f"subagents {round(100 * c['subagent_usd'] / tot)}% of the cost"
+                   + (f", mostly {top[0]} ({top[1]['runs']} runs)" if top else ""))
+    for part, label in (("cache_write", "cache writes (context written to the cache)"), ("output", "output tokens"),
+                        ("cache_read", "cache reads (context re-read every turn)"), ("input", "uncached input")):
+        share = c["parts"].get(part, 0) / tot
+        if share >= 0.35:
+            out.append(f"{label} {round(100 * share)}%")
+    if s["peak_context_tokens"] >= 150_000:
+        out.append(f"peak context {s['peak_context_tokens'] // 1000}k tokens")
+    if s["compactions"]:
+        out.append(f"{s['compactions']} context compaction(s)")
+    if s["primary_effort"] in ("xhigh", "max"):
+        out.append(f"effort {s['primary_effort']}")
+    return out[:5]
 
 
 def aggregate(sessions, inventory, prices):
@@ -689,37 +861,160 @@ def aggregate(sessions, inventory, prices):
         "pct_sessions_with_strong_correction": round(
             100 * sum(1 for s in with_turns if s["corrections_strong"]) / len(with_turns), 1) if with_turns else 0,
         "total_interruptions": sum(s["interruptions"] for s in sessions),
+        "total_rejected_tool_calls": sum(s["rejected_tool_calls"] for s in sessions),
         "total_tool_errors": sum(s["tool_errors"] for s in sessions),
         "sessions_using_plan_mode": sum(1 for s in sessions if s["plan_mode_used"]),
+        "sessions_with_subagents": sum(1 for s in sessions if s["subagents"]["runs"]),
+        "subagent_runs": sum(s["subagents"]["runs"] for s in sessions),
+        "workflow_agent_runs": sum(s["subagents"]["workflow_runs"] for s in sessions),
         "active_hours": round(sum(s["active_min"] for s in sessions) / 60, 1),
     }
 
-    # models
+    # models: sessions and assistant_msgs count the main conversation; tokens and cost include subagents
     by_model = {}
+
+    def bm(f):
+        return by_model.setdefault(f, {"sessions": 0, "primary_in_sessions": 0, "assistant_msgs": 0, "subagent_msgs": 0,
+                                       "tokens": Counter(), "ids": set(), "cost": 0.0})
     for s in sessions:
         for f, cnt in s["models"].items():
-            d = by_model.setdefault(f, {"sessions": 0, "primary_in_sessions": 0, "assistant_msgs": 0,
-                                        "tokens": Counter(), "ids": set()})
+            d = bm(f)
             d["sessions"] += 1
             d["assistant_msgs"] += cnt
-            d["ids"].update(s["model_ids"].get(f, []))
+        for f, cnt in s["subagent_models"].items():
+            bm(f)["subagent_msgs"] += cnt
+        for f, ids in s["model_ids"].items():
+            bm(f)["ids"].update(ids)
         if s["primary_model"]:
-            by_model[s["primary_model"]]["primary_in_sessions"] += 1
+            bm(s["primary_model"])["primary_in_sessions"] += 1
         for f, tk in s["tokens"].items():
-            if f in by_model:
-                by_model[f]["tokens"].update(tk)
+            bm(f)["tokens"].update(tk)
+        for f, c in s["cost"]["by_model"].items():
+            bm(f)["cost"] += c
     A["by_model"] = {}
     for f, d in by_model.items():
         tk = {k: d["tokens"].get(k, 0) for k in ("input", "output", "cache_read", "cache_write")}
         A["by_model"][f] = {"sessions": d["sessions"], "primary_in_sessions": d["primary_in_sessions"],
-                            "assistant_msgs": d["assistant_msgs"], "model_ids": sorted(d["ids"]), "tokens": tk,
-                            "estimated_cost_usd": est_cost(f, d["ids"], tk, prices)}
+                            "assistant_msgs": d["assistant_msgs"], "subagent_msgs": d["subagent_msgs"],
+                            "model_ids": sorted(d["ids"]), "tokens": tk,
+                            "estimated_cost_usd": round(d["cost"], 2) if d["cost"] > 0 else (0.0 if not any(tk.values()) else None)}
     A["sessions_with_model_switch"] = sum(1 for s in sessions if s["model_switches"])
     A["sessions_with_slash_model"] = sum(1 for s in sessions if s["slash_model_commands"])
     sub = Counter()
     for s in sessions:
         sub.update(s["subagent_models"])
     A["subagent_model_msgs"] = dict(sub)
+    A["sessions_with_slash_effort"] = sum(1 for s in sessions if s["slash_effort_commands"])
+
+    # effort level per assistant message (main conversation and subagents)
+    eff = {}
+    for s in sessions:
+        for e, n in s["effort"].items():
+            eff.setdefault(e, {"main_msgs": 0, "subagent_msgs": 0, "primary_in_sessions": 0})["main_msgs"] += n
+        for e, n in s["subagents"]["effort"].items():
+            eff.setdefault(e, {"main_msgs": 0, "subagent_msgs": 0, "primary_in_sessions": 0})["subagent_msgs"] += n
+        if s["primary_effort"]:
+            eff[s["primary_effort"]]["primary_in_sessions"] += 1
+    A["by_effort"] = dict(sorted(eff.items(), key=lambda kv: -(kv[1]["main_msgs"] + kv[1]["subagent_msgs"])))
+
+    # estimated cost at list prices (see pricing.py): never the user's real bill
+    parts = Counter()
+    for s in sessions:
+        parts.update(s["cost"]["parts"])
+    total = sum(s["cost"]["total_usd"] for s in sessions)
+    by_task_cost = defaultdict(lambda: {"sessions": 0, "usd": 0.0})
+    for s in sessions:
+        d = by_task_cost[s["task_type"]]
+        d["sessions"] += 1
+        d["usd"] += s["cost"]["total_usd"]
+    by_sub = {}
+    for s in sessions:
+        for typ, d in s["subagents"]["by_type"].items():
+            x = by_sub.setdefault(typ, {"runs": 0, "sessions": 0, "usd": 0.0, "models": Counter(), "effort": Counter(),
+                                        "tool_errors": 0, "edit_calls": 0})
+            x["runs"] += d["runs"]
+            x["sessions"] += 1
+            x["usd"] += d["cost_usd"]
+            x["models"].update(d["models"])
+            x["effort"].update(d["effort"])
+            x["tool_errors"] += d["tool_errors"]
+            x["edit_calls"] += d["edit_calls"]
+    cc_sessions = [s for s in sessions if s["cost"]["claude_code_reported_usd"] is not None]
+    cc = [s["cost"]["claude_code_reported_usd"] for s in cc_sessions]
+    A["cost"] = {
+        "total_usd": round(total, 2),
+        "main_usd": round(sum(s["cost"]["main_usd"] for s in sessions), 2),
+        "subagent_usd": round(sum(s["cost"]["subagent_usd"] for s in sessions), 2),
+        "per_session_avg_usd": round(total / n, 2) if n else 0,
+        "parts": {k: round(v, 2) for k, v in parts.most_common()},
+        "by_task_type": {t: {"sessions": d["sessions"], "usd": round(d["usd"], 2), "per_session_usd": round(d["usd"] / d["sessions"], 2)}
+                         for t, d in sorted(by_task_cost.items(), key=lambda kv: -kv[1]["usd"])},
+        "by_subagent_type": {t: {"runs": d["runs"], "sessions": d["sessions"], "usd": round(d["usd"], 2),
+                                 "per_run_usd": round(d["usd"] / d["runs"], 3) if d["runs"] else 0,
+                                 "models": dict(d["models"]), "effort": dict(d["effort"]), "tool_errors": d["tool_errors"],
+                                 "edit_calls": d["edit_calls"]}
+                             for t, d in sorted(by_sub.items(), key=lambda kv: -kv[1]["usd"])},
+        "top_sessions": [{"session_id": s["id"], "title": s.get("title"), "task_type": s["task_type"], "model": s["primary_model"],
+                          "effort": s["primary_effort"], "usd": round(s["cost"]["total_usd"], 2),
+                          "subagent_usd": round(s["cost"]["subagent_usd"], 2), "user_turns": s["user_turns"],
+                          "drivers": cost_drivers(s)}
+                         for s in sorted(sessions, key=lambda s: -s["cost"]["total_usd"])[:5] if s["cost"]["total_usd"] > 0],
+        "workflows": [{"session_id": s["id"], **w} for s in sessions for w in s["subagents"]["workflows"]][:20],
+        "unpriced_msgs": sum(s["cost"]["unpriced_msgs"] for s in sessions),
+        # Cross-check only: Claude Code's own running figure (cost-state entries) for the sessions that have one,
+        # next to this estimate for the same sessions. It may include background requests the transcript does not show.
+        "claude_code_reported_usd": round(sum(cc), 2) if cc else None,
+        "estimate_same_sessions_usd": round(sum(s["cost"]["total_usd"] for s in cc_sessions), 2) if cc else None,
+        "sessions_with_claude_code_figure": len(cc),
+        "custom_prices": bool(prices),
+        "source": PRICING_URL, "prices_as_of": PRICES_AS_OF, "disclaimer": DISCLAIMER,
+    }
+
+    # permission friction: prompts the user had to answer, tool calls they rejected, calls a rule or classifier blocked
+    perm = {"manual_approvals": Counter(), "approval_commands": Counter(), "rejected": Counter(), "denials": Counter(),
+            "blocked_by_policy": Counter(), "modes": Counter()}
+    for s in sessions:
+        perm["manual_approvals"].update(s["manual_approvals"])
+        perm["approval_commands"].update(s["manual_approval_commands"])
+        perm["rejected"].update(s["rejected_tools"])
+        perm["denials"].update(s["tool_denials"])
+        perm["blocked_by_policy"].update(s["blocked_by_policy"])
+        perm["modes"].update({m: 1 for m in s["permission_modes"]})
+    A["permissions"] = {k: dict(v.most_common(15)) for k, v in perm.items()}
+    A["permissions"]["sessions_with_manual_approval"] = sum(1 for s in sessions if s["manual_approvals"])
+    A["permissions"]["sessions_with_rejection"] = sum(1 for s in sessions if s["rejected_tool_calls"])
+    A["permissions"]["note"] = ("modes counts sessions per permission mode. Interactive answers (AskUserQuestion, "
+                                "plan approval) are not counted as approvals.")
+    A["hooks_activity"] = {"stop_hook_runs": sum(s["hooks"]["runs"] for s in sessions),
+                           "hook_errors": sum(s["hooks"]["errors"] for s in sessions),
+                           "stops_blocked_by_hook": sum(s["hooks"]["blocked_stop"] for s in sessions),
+                           "sessions_with_stop_hooks": sum(1 for s in sessions if s["hooks"]["runs"])}
+
+    # how sessions ended, per task type
+    out_t = defaultdict(lambda: {"sessions": 0, "with_edits": 0, "verified_finish": 0, "committed": 0, "pushed": 0,
+                                 "with_pr": 0, "checks_run": 0})
+    for s in with_turns:
+        o, d = s["outcome"], out_t[s["task_type"]]
+        d["sessions"] += 1
+        d["with_edits"] += o["edited"]
+        d["verified_finish"] += bool(o["verified_finish"])
+        d["committed"] += o["committed"]
+        d["pushed"] += o["pushed"]
+        d["with_pr"] += o["prs"] > 0
+        d["checks_run"] += o["checks_run"] > 0
+    edited = [s for s in with_turns if s["outcome"]["edited"]]
+    A["outcomes"] = {
+        "by_task_type": dict(sorted(out_t.items(), key=lambda kv: -kv[1]["sessions"])),
+        "sessions_with_edits": len(edited),
+        "verified_finish_pct": round(100 * sum(1 for s in edited if s["outcome"]["verified_finish"]) / len(edited), 1) if edited else None,
+        "unverified_sessions": [s["id"] for s in edited if not s["outcome"]["verified_finish"]][:20],
+        "note": ("verified_finish: a test, build, lint or type-check command (main session or subagent) succeeded after the last "
+                 "file edit. A heuristic: checks run another way (a hook, CI, by hand) are not seen."),
+    }
+    A["context"] = {"compactions": sum(s["compactions"] for s in sessions),
+                    "sessions_with_compaction": sum(1 for s in sessions if s["compactions"]),
+                    "api_errors": sum(s["api_errors"] for s in sessions),
+                    "max_peak_context_tokens": max((s["peak_context_tokens"] for s in sessions), default=0)}
 
     # task types
     by_task = defaultdict(list)
@@ -728,7 +1023,8 @@ def aggregate(sessions, inventory, prices):
     A["by_task_type"] = {
         t: {"sessions": len(v), "avg_user_turns": round(sum(x["user_turns"] for x in v) / len(v), 1),
             "avg_friction_per_turn": round(sum(x["friction_per_turn"] for x in v) / len(v), 3),
-            "models": dict(Counter(x["primary_model"] or "unknown" for x in v))}
+            "models": dict(Counter(x["primary_model"] or "unknown" for x in v)),
+            "efforts": dict(Counter(x["primary_effort"] or "unknown" for x in v))}
         for t, v in sorted(by_task.items(), key=lambda kv: -len(kv[1]))
     }
     matrix = {}
@@ -740,7 +1036,10 @@ def aggregate(sessions, inventory, prices):
                          "avg_friction_per_turn": round(sum(y["friction_per_turn"] for y in xs) / len(xs), 3),
                          "corrections": sum(len(y["corrections"]) for y in xs),
                          "interruptions": sum(y["interruptions"] for y in xs),
-                         "tool_errors": sum(y["tool_errors"] for y in xs)}
+                         "rejected_tool_calls": sum(y["rejected_tool_calls"] for y in xs),
+                         "tool_errors": sum(y["tool_errors"] for y in xs),
+                         "efforts": dict(Counter(y["primary_effort"] or "unknown" for y in xs)),
+                         "avg_est_cost_usd": round(sum(y["cost"]["total_usd"] for y in xs) / len(xs), 2)}
                      for f, xs in cell.items()}
     A["task_model_matrix"] = matrix
 
@@ -752,24 +1051,32 @@ def aggregate(sessions, inventory, prices):
             continue
         writes = s["files_edited"] + s["bash_write_commands"]
         trivial = (s["user_turns"] <= 3 and s["tool_calls"] <= 6 and not s["corrections"]
-                   and writes <= 1 and not s["interruptions"])
+                   and writes <= 1 and not s["interruptions"] and s["subagents"]["runs"] == 0)
         hard = s["user_turns"] >= 6 and s["friction_per_turn"] >= 0.3
+        eff = f", effort {s['primary_effort']}" if s["primary_effort"] else ""
         if tier >= 3 and trivial:
             mism.append({"session_id": s["id"], "task_type": s["task_type"], "model": s["primary_model"],
-                         "kind": "heavy-for-trivial?",
-                         "evidence": f"{s['user_turns']} turns, {s['tool_calls']} tool calls, {s['files_edited']} files edited + {s['bash_write_commands']} Bash write commands, no corrections"})
-        elif tier >= 3 and s["user_turns"] <= 3 and s["tool_calls"] <= 15 and not s["corrections"] and not s["interruptions"]:
+                         "effort": s["primary_effort"], "kind": "heavy-for-trivial?",
+                         "evidence": f"{s['user_turns']} turns, {s['tool_calls']} tool calls, {s['files_edited']} files edited + {s['bash_write_commands']} Bash write commands, no corrections{eff}, est. ${s['cost']['total_usd']}"})
+        elif tier == 2 and trivial and s["primary_effort"] in ("xhigh", "max"):
             mism.append({"session_id": s["id"], "task_type": s["task_type"], "model": s["primary_model"],
-                         "kind": "short-on-heavy?",
-                         "evidence": f"{s['user_turns']} turns, {s['tool_calls']} tool calls, {writes} writes; read it to judge whether it needed deep reasoning"})
+                         "effort": s["primary_effort"], "kind": "high-effort-for-trivial?",
+                         "evidence": f"{s['user_turns']} turns, {s['tool_calls']} tool calls, {writes} writes{eff}"})
+        elif tier >= 3 and s["user_turns"] <= 3 and s["tool_calls"] <= 15 and not s["corrections"] and not s["interruptions"]:
+            runs = s["subagents"]["runs"]
+            mism.append({"session_id": s["id"], "task_type": s["task_type"], "model": s["primary_model"],
+                         "effort": s["primary_effort"], "kind": "short-on-heavy?",
+                         "evidence": f"{s['user_turns']} turns, {s['tool_calls']} tool calls, {writes} writes{eff}"
+                                     + (f", {runs} subagent runs" if runs else "")
+                                     + "; read it to judge whether it needed deep reasoning"})
         elif tier == 1 and (hard or s["user_turns"] >= 8):
             mism.append({"session_id": s["id"], "task_type": s["task_type"], "model": s["primary_model"],
-                         "kind": "light-for-hard?",
-                         "evidence": f"{s['user_turns']} turns, friction/turn {s['friction_per_turn']}"})
+                         "effort": s["primary_effort"], "kind": "light-for-hard?",
+                         "evidence": f"{s['user_turns']} turns, friction/turn {s['friction_per_turn']}{eff}"})
         elif tier == 2 and s["task_type"] in ("refactor", "bugfix", "infra-ci") and hard:
             mism.append({"session_id": s["id"], "task_type": s["task_type"], "model": s["primary_model"],
-                         "kind": "maybe-too-light-for-hard?",
-                         "evidence": f"{s['user_turns']} turns, friction/turn {s['friction_per_turn']}, {s['corrections_strong']} strong corrections"})
+                         "effort": s["primary_effort"], "kind": "maybe-too-light-for-hard?",
+                         "evidence": f"{s['user_turns']} turns, friction/turn {s['friction_per_turn']}, {s['corrections_strong']} strong corrections{eff}"})
     A["model_mismatch_candidates"] = mism[:25]
 
     # prompt quality (first prompts)
@@ -784,7 +1091,7 @@ def aggregate(sessions, inventory, prices):
 
     # best / worst
     ranked = sorted([s for s in with_turns if s["user_turns"] >= 3], key=lambda s: (s["friction_per_turn"], -s["user_turns"]))
-    pick = lambda s: {"session_id": s["id"], "task_type": s["task_type"], "model": s["primary_model"],
+    pick = lambda s: {"session_id": s["id"], "title": s.get("title"), "task_type": s["task_type"], "model": s["primary_model"],
                       "user_turns": s["user_turns"], "friction_per_turn": s["friction_per_turn"],
                       "first_prompt": s["first_prompt"]}
     by_t = defaultdict(list)
@@ -906,6 +1213,7 @@ def mode_schema(files, extra):
     block_types = Counter()
     msg_keys = defaultdict(Counter)
     usage_keys = Counter()
+    subtypes = Counter()
     for f in files[:3]:
         for e in iter_entries(f):
             if e is None:
@@ -913,6 +1221,8 @@ def mode_schema(files, extra):
                 continue
             t = e.get("type")
             shapes[t].update(e.keys())
+            if t == "system" and e.get("subtype"):
+                subtypes[e["subtype"]] += 1
             m = e.get("message")
             if isinstance(m, dict):
                 msg_keys[t].update(m.keys())
@@ -933,6 +1243,22 @@ def mode_schema(files, extra):
               "message.model": any(k == "model" for k in msg_keys.get("assistant", {})),
               "message.usage": bool(usage_keys), "timestamp": any("timestamp" in c for c in shapes.values())}
     print("\nExpected fields present:", needed)
+    # Used when present; the analysis degrades (and says so) without them.
+    optional = {
+        "user.promptSource (typed vs automated prompts)": "promptSource" in shapes.get("user", {}),
+        "assistant.effort (effort level)": "effort" in shapes.get("assistant", {}),
+        "usage.cache_creation (5m/1h cache-write split for pricing)": "cache_creation" in usage_keys,
+        "user.permissionDecision (manual approvals)": "permissionDecision" in shapes.get("user", {}),
+        "user.toolDenialKind (rejected tool calls)": "toolDenialKind" in shapes.get("user", {}),
+        "cost-state entries (Claude Code's own cost figure, cross-check only)": "cost-state" in shapes,
+        "ai-title entries (session titles)": "ai-title" in shapes,
+        "pr-link entries (pull requests)": "pr-link" in shapes,
+        "system turn_duration / compact_boundary": bool(subtypes.get("turn_duration") or subtypes.get("compact_boundary")),
+        "<session-id>/subagents/ folders (subagent transcripts)": any(f.with_suffix("").joinpath("subagents").is_dir() for f in files[:20]),
+    }
+    print("Optional fields seen (in these files):")
+    for k, v in optional.items():
+        print(f"  {'yes' if v else 'no '}  {k}")
     return 0 if all(needed.values()) else 2
 
 
@@ -1005,7 +1331,10 @@ def main():
     ap.add_argument("--out", default=f"{DEFAULT_DIR}/summary.json",
                     help="summary file; the default folder ./prompt-insights/ is created and git-ignored")
     ap.add_argument("--labels", help="JSON file {session_id: task_type} to override heuristic task types")
-    ap.add_argument("--prices", help="optional JSON {model-substring: {input, output, cache_read, cache_write}} in USD per 1M tokens")
+    ap.add_argument("--prices", help="optional JSON {model-substring: {input, output, cache_read, cache_write, cache_write_1h}} "
+                                     "in USD per 1M tokens; overrides the built-in list prices (pricing.py) for matching models")
+    ap.add_argument("--no-subagents", action="store_true",
+                    help="skip <session-id>/subagents/ transcripts (faster; subagent models, tokens and cost are then missing)")
     ap.add_argument("--extra-redact", action="append", default=[], help="extra regex to redact (repeatable)")
     ap.add_argument("--schema", action="store_true", help="print observed JSONL structure and exit")
     ap.add_argument("--show", metavar="SESSION_ID", help="print redacted transcript of a session (id or unique prefix)")
@@ -1077,7 +1406,7 @@ def main():
         if any(f.stem.startswith(x) for x in a.exclude_session):
             skipped += 1
             continue
-        s_ = parse_session(f, extra, labels)
+        s_ = parse_session(f, extra, labels, prices, with_subagents=not a.no_subagents)
         if is_self_run(s_) and not a.include_self:
             self_runs.append(s_)
             continue
@@ -1108,12 +1437,28 @@ def main():
     inventory = build_inventory(sessions, scoped=bool(a.project), used=used)
     roots_info = project_roots(sessions, root)
     agg = aggregate(sessions, inventory, prices)
+    cwds = sorted({s["_cwd"] for s in sessions if s["_cwd"]})
+    settings = scan_settings(cwds, project_name, extra)
+
+    # compare with the previous report, if one was saved in history/
+    out = Path(a.out)
+    newest = max((s["_start"] for s in sessions if s["_start"]), default=None)
+    prev = find_previous(out.parent, newest)
+    fu = None
+    if prev:
+        hooks_text = "\n".join(h["command"] for st in settings for h in st.get("hooks", []))
+        fu = followup(prev, sessions, [(f["path"], f["_text"]) for f in inventory], hooks_text)
 
     warnings = [f"sanity: {p}" for p in problems]
     if not any(any(t for t in s["tokens"].values()) for s in sessions):
         warnings.append("no token usage found; model comparison relies on friction signals only")
-    if not prices:
-        warnings.append("no --prices supplied; cost is not estimated (token counts are measured)")
+    unpriced = agg["cost"]["unpriced_msgs"]
+    if unpriced:
+        ids = sorted({i for s in sessions for f, v in s["model_ids"].items() if not s["cost"]["by_model"].get(f) for i in v})
+        warnings.append(f"{unpriced} assistant message(s) have no list price (models: {', '.join(ids[:6]) or '?'}); "
+                        "their cost is left out of the estimate. Add them with --prices.")
+    if a.no_subagents:
+        warnings.append("--no-subagents: subagent and workflow transcripts were not read; their models, tokens and cost are missing")
     unknown_types = Counter()
     for s in sessions:
         for k, v in s["_stats"]["types"].items():
@@ -1129,6 +1474,9 @@ def main():
     if heuristic_labels:
         warnings.append(f"task types are heuristic for {len(heuristic_labels)} of {len(sessions)} sessions: review labels.todo.json, "
                         "write labels.json and re-run with --labels so the model/task matrix is trustworthy")
+
+    if fu and fu["sessions_since"] == 0:
+        warnings.append("follow-up: no session in this sample started after the previous report; the 'after' column is empty")
 
     starts = [s["start"] for s in sessions if s["start"]]
     for s in sessions:
@@ -1153,18 +1501,25 @@ def main():
             "claude_code_versions": dict(Counter(s["claude_code_version"] for s in sessions if s["claude_code_version"])),
             "warnings": warnings,
             "measured": ["session/turn counts", "timestamps and active time", "models per assistant message",
-                         "token usage (deduplicated by message id)", "tool calls and errors", "agent-file edits via tool calls",
-                         "skill and subagent invocations", "file mtimes and sizes"],
+                         "token usage (deduplicated by message id, main session and subagents)", "effort level per message",
+                         "subagent and workflow-agent runs, models and tokens", "tool calls and errors", "agent-file edits via tool calls",
+                         "skill and subagent invocations", "permission approvals and rejected tool calls", "context compactions",
+                         "hooks and permission rules in settings files", "file mtimes and sizes"],
+            "estimated": [f"cost: measured tokens x Claude API list prices from {PRICING_URL} (as of {PRICES_AS_OF})"
+                          + ("; --prices overrides applied" if prices else "") + ". Not the user's actual cost."],
             "heuristic": ["task_type", "corrections (regex)", "repeat_prompt_pairs", "prompt_quality flags",
-                          "model mismatch candidates", "dead-reference candidates", "repeated-correction clusters"],
-            "not_covered": "Subagent transcripts in separate files, plugin-provided skills, and non-typed context are not analyzed.",
+                          "model mismatch candidates", "dead-reference candidates", "repeated-correction clusters",
+                          "verified finish (check command after the last edit)", "cost drivers"],
+            "not_covered": ("Plugin-provided skills and hooks, managed (organisation) settings, and non-typed context are not "
+                            "analyzed. Subagent transcripts are read" + (" (skipped this run)." if a.no_subagents else ".")),
         },
         "aggregates": agg,
+        "followup": fu,
         "project_roots": roots_info,
         "agent_files": inventory,
+        "settings": settings,
         "sessions": sessions,
     }
-    out = Path(a.out)
     guard = ensure_output_dir(out.parent)
     out.write_text(json.dumps(summary, indent=1, default=str), encoding="utf-8")
 
@@ -1180,8 +1535,14 @@ def main():
     pool = f"{len(sel_total)} in the filtered set" if (a.project or a.since_days) else f"{len(all_files)} available"
     print(f"Sessions analyzed: {t['sessions']} of {pool} | avg user turns: {t['avg_user_turns']} | "
           f"with corrections/interrupts: {t['pct_sessions_with_correction_or_interrupt']}%")
-    print("Models (sessions): " + ", ".join(f"{k}={v['sessions']}" for k, v in agg["by_model"].items()))
-    print(f"Agent-file edit events: {agg['agent_file_edit_count']} | agent files found: {len(inventory)}")
+    print("Models (sessions): " + ", ".join(f"{k}={v['sessions']}" for k, v in agg["by_model"].items() if v["sessions"]))
+    print(f"Subagent runs: {t['subagent_runs']} ({t['workflow_agent_runs']} in workflows) in {t['sessions_with_subagents']} sessions")
+    c = agg["cost"]
+    print(f"Estimated cost at API list prices: ${c['total_usd']} (subagents ${c['subagent_usd']}). "
+          "An estimate from the public price list, not your actual cost.")
+    print(f"Agent-file edit events: {agg['agent_file_edit_count']} | agent files found: {len(inventory)} | settings files: {len(settings)}")
+    if fu:
+        print(f"Follow-up: previous report {fu['previous_report']['generated_at']}, {fu['sessions_since']} session(s) since")
     for w in warnings:
         print("WARNING:", w)
     return 0

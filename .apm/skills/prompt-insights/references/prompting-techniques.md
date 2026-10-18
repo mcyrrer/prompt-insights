@@ -13,7 +13,9 @@ uses well belongs under strengths, not here.
 | Many turns on code the agent had to learn (long exploration, wrong files touched) | `rpi` | `subagent-research` |
 | Feature was right in code but wrong for the user (missing UI, unclear output) | `verify-loop` | `builder-critic` |
 | Short, vague first prompt for something with many choices | `interview` | `plan-mode` |
-| Same correction in 2+ sessions | `standing-rules` | - |
+| Same correction in 2+ sessions | `standing-rules` | `hooks` |
+| A rule a command can check keeps breaking although it is in CLAUDE.md | `hooks` | - |
+| Edit sessions rarely end on a passing check (`outcomes.verified_finish_pct`) | `verify-loop` | `hooks` |
 | Bug fix bounced back | `repro-first` | `deep-thinking` |
 | Sessions with 30+ typed prompts, agent forgets earlier decisions | `context-hygiene` | `rpi` |
 | Style or structure of output keeps missing | `pattern-reference` | - |
@@ -62,6 +64,9 @@ Skip it when: the change is one file and you can describe the diff in a sentence
 - **standing-rules**: say it twice, then put it in CLAUDE.md, a rule or a skill. Write it as a positive instruction.
 - **pattern-reference**: "Follow the pattern in <file>" or paste one good example.
 - **deep-thinking**: ask for options and trade-offs on design decisions and hard bugs; keep routine edits fast.
+- **hooks**: a settings.json hook runs a command at a fixed point (PostToolUse after an edit, PreToolUse
+  before a call, Stop when Claude finishes) every time. Use it for rules a command can check or do:
+  format after edits, run tests before stopping, block edits to a protected path.
 
 ## Writing the recommendation
 

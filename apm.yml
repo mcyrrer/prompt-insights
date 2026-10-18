@@ -1,6 +1,6 @@
 name: prompt-insights
-version: 1.0.0
-description: Analyze your Claude Code session history and get a tabbed HTML report with a quick win, prompting techniques (RPI and more), stale agent-file checks and model-routing advice.
+version: 1.1.0
+description: Analyze your Claude Code session history and get a tabbed HTML report with a quick win, prompting techniques (RPI and more), stale agent-file checks, hooks and permission friction, model and effort routing for sessions and subagents, an estimated cost at API list prices, and a follow-up on the previous report.
 author: mcyrrer
 license: MIT
 type: skill

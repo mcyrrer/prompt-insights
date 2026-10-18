@@ -14,8 +14,10 @@ customer names. Keep quotes short.
     "why": "One or two sentences, tied to a number or session from the data",
     "do_this": "The exact text to paste: a prompt, a CLAUDE.md line, or a command",
     "minutes": 5,
-    "evidence": "session ids / numbers"
+    "evidence": "session ids / numbers",
+    "metric": "optional: the follow-up metric that measures it (see below), e.g. has_done_criteria"
   },
+  "followup_note": "only when summary.followup is set: what changed since the last report, in a few sentences",
   "headline_insights": ["5 short, concrete findings, each with a number or example"],
   "top_change": "The single highest-impact change, one or two sentences (bigger than the quick win)",
 
@@ -69,7 +71,9 @@ customer names. Keep quotes short.
        "evidence": "what shows it", "action": "what to do"}
     ],
     "repeated_corrections": [
-      {"theme": "", "occurrences": 3, "target_file": "CLAUDE.md", "proposed_line": "exact line to add"}
+      {"theme": "", "occurrences": 3, "target_file": "CLAUDE.md", "proposed_line": "exact line to add",
+       "enforcement": "claude-md|rule|skill|hook",
+       "hook": {"event": "PostToolUse", "matcher": "Edit|Write", "command": "the command to run", "why": "one line"}}
     ],
     "rewrites": [
       {"path": "", "action": "rewrite|merge|remove", "issue": "", "proposed_text": ""}
@@ -83,14 +87,26 @@ customer names. Keep quotes short.
        "suggestion": "what to use instead and why"}
     ],
     "guide": [
-      {"task_type": "", "recommended": "model tier or alias", "why": "", "evidence": "sessions / numbers, or 'no data'"}
+      {"task_type": "", "recommended": "model tier or alias", "effort": "low|medium|high|xhigh|max",
+       "why": "", "evidence": "sessions / numbers, or 'no data'"}
     ],
-    "rules_of_thumb": ["practical rules, e.g. when to use /model or plan mode"]
+    "rules_of_thumb": ["practical rules, e.g. when to use /model, /effort or plan mode"]
+  },
+
+  "spend": {
+    "headline": "one or two sentences on what drives the estimated cost, with numbers from aggregates.cost",
+    "savings": [{"action": "a change the user can make", "why": "the driver it reduces", "evidence": "session ids / numbers"}]
+  },
+
+  "permissions": {
+    "findings": ["short findings about approvals, rejections, hooks and rules, with numbers"],
+    "allow_rules": [{"rule": "Bash(npm run test *)", "why": "approved by hand N times", "target": ".claude/settings.json"}]
   },
 
   "templates": [
     {
-      "task_type": "", "title": "", "recommended_model": "", "technique": "optional technique id",
+      "task_type": "", "title": "", "recommended_model": "", "recommended_effort": "optional",
+      "technique": "optional technique id",
       "goal": "what and why, with <placeholders>",
       "context": "files, docs, examples to read first",
       "constraints": "what must not change, limits",
@@ -148,6 +164,20 @@ customer names. Keep quotes short.
   file it belongs in, even when it appears in only one session.
 - **Model names**: refer to tiers or the aliases the user actually used. Do not hard-code model
   versions or prices from memory.
+- **Cost** is an estimate: measured tokens priced at the Claude API list prices in
+  `scripts/pricing.py` (from https://platform.claude.com/docs/en/about-claude/pricing). Every cost
+  you write says so ("about $12 at API list prices"); never call it the user's spend or bill. Only
+  quote figures from `aggregates.cost` or `sessions[].cost`. `claude_code_reported_usd` is a
+  cross-check, not a second answer.
+- **Hooks**: use `enforcement: "hook"` only for rules a command can check or carry out (formatting,
+  tests, blocking edits to a path). Write `hook.command` so it works as a `"type": "command"` hook;
+  the report renders the settings.json block. Judgment calls stay in CLAUDE.md or a skill.
+- **Allow rules**: propose them only for commands the data shows were approved by hand, and never
+  for destructive commands (rm, git push --force, deploys).
+- **`quick_win.metric`** is one of: `typed_prompts`, `corrections_pct`, `friction_per_turn`,
+  `has_done_criteria`, `has_goal_why`, `has_scope`, `has_context_pointer`, `asks_plan_first`,
+  `plan_mode`, `verified_finish`, `rejected_tool_calls`, `compactions`, `cost_per_session`. The next
+  run highlights it in the follow-up table.
 
 ## Action plan sources and `/doctor prompt-audit`
 
@@ -167,6 +197,8 @@ Free-form URLs are never rendered.
 | `memory` | How Claude remembers your project |
 | `prompt-audit` | Audit your instruction files (`/doctor prompt-audit`) |
 | `skills`, `sub-agents`, `hooks` | Skills, subagents, hooks guide |
+| `permissions`, `settings` | Permission rules (allow, ask, deny); settings files |
+| `pricing` | Claude API pricing page (the list prices behind the cost estimate) |
 | `model-config` | Model configuration (`/model`, `opusplan`) |
 | `modes`, `workflows`, `how-it-works`, `features` | Permission modes, common workflows, how Claude Code works, extension overview |
 | `prompting`, `context-eng` | Claude prompting best practices; Anthropic's context-engineering article |
