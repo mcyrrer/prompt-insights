@@ -15,15 +15,15 @@ apply in five minutes at the top of the first tab.
 
 | Tab | What is in it |
 |---|---|
-| **Overview** | How many sessions the report covers and how to include more, the quick win (with a paste-ready block), what changed since your last report, the highest-impact change, headline findings, key numbers |
+| **Overview** | The quick win (with a paste-ready block), what changed since your last report (4 to 6 tiles with green and red arrows for the biggest moves, full table behind a toggle), the highest-impact change, headline findings, key numbers |
 | **Prompts** | Prompt-quality scores, the recurring weaknesses with before/after rewrites of your real prompts (quotes are checked against the transcript), strengths, a best-vs-worst comparison, how sessions ended (passing check, commit, PR) |
-| **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement, with a dedicated prompt for each phase plus one to iterate the plan, adapted from the [goose RPI tutorial](https://goose-docs.ai/docs/tutorials/rpi/)), plan mode, staged delivery, verify loops, interview-first, hooks and more. Also up to 3 ready-to-send prompts from the [official Claude Code prompt library](https://code.claude.com/docs/en/prompt-library), filled in with your own project terms |
+| **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement, with a one-liner and a full prompt for each phase plus one to iterate the plan, the full ones meant to live in a skill, adapted from the [goose RPI tutorial](https://goose-docs.ai/docs/tutorials/rpi/)), plan mode, staged delivery, verify loops, interview-first, hooks and more. Also up to 3 ready-to-send prompts from the [official Claude Code prompt library](https://code.claude.com/docs/en/prompt-library), filled in with your own project terms |
 | **Agent files** | Health of CLAUDE.md, AGENTS.md, rules, skills, commands and subagents; what exists on disk; instructions you repeat across sessions; a `/doctor prompt-audit` hint when files look stale |
 | **Hooks & permissions** | Hooks and allow/ask/deny rules in your settings files, tool calls you approved or rejected by hand, rules worth turning into hooks, allow rules worth adding |
 | **Models & cost** | Messages and tokens per model and effort level, estimated cost by model, task type, subagent type and workflow, the most expensive sessions and why, context-window use (peak size, startup size, cache restarts after idle, missing /clear and /compact, with fixes; assumes a subscription's 1-hour cache), task-type vs model matrix, models that look too heavy or too light |
 | **Templates** | Reusable prompts for your most common task types: goal, context, constraints, approach, done-when |
 | **Action plan** | Do now / this month / ongoing, with links to Anthropic's own documentation |
-| **Method** | What was measured vs guessed, sample size, warnings and limits |
+| **Method** | What was measured vs guessed, which sessions are included and how to include more or fewer, warnings and limits |
 
 ## Requirements
 
@@ -157,7 +157,7 @@ python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --show <sessi
 
 | Flag | Meaning |
 |---|---|
-| `--limit N` | Most recent N sessions (default 20, `0` = all). The Overview tab shows how many were included |
+| `--limit N` | Most recent N sessions (default 20, `0` = all). The Method tab shows how many were included |
 | `--project TEXT` | Only sessions whose project folder contains the text; also narrows the agent-file check to that project |
 | `--since-days N` | Only sessions from the last N days, N from 1 to 7. Combine with `--limit` to cap the count; use `--limit` alone for a longer period |
 | `--history-dir DIR` | Where snapshots are kept (default `$PROMPT_INSIGHTS_HISTORY`, else `~/.claude/prompt-insights/history`) |

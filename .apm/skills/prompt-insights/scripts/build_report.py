@@ -107,6 +107,11 @@ h3{font:600 20px/1.25 var(--serif);margin:32px 0 10px;letter-spacing:-.005em}h4{
 button.copy{font:inherit;font-size:12px;padding:3px 10px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:6px;cursor:pointer}
 button.copy:hover{background:var(--code)}
 .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);margin-right:4px}
+.chgs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:12px 0 6px}
+.chg{border:1px solid var(--line);border-top-width:4px;border-radius:8px;padding:10px 12px;background:var(--card)}
+.chg.good{border-top-color:var(--good)}.chg.bad{border-top-color:var(--bad)}.chg.flat{border-top-color:var(--line)}
+.chg-l{font-size:13px;color:var(--muted);min-height:2.6em}.chg-v{font:600 28px/1.2 var(--serif);margin:4px 0}.chg-d{font-size:13px;color:var(--muted)}
+.chg.good .chg-a,.chg.good .chg-d{color:var(--good)}.chg.bad .chg-a,.chg.bad .chg-d{color:var(--bad)}
 .tag.good{color:var(--good);border-color:var(--good)}.tag.bad{color:var(--bad);border-color:var(--bad)}.tag.warn{color:var(--warn);border-color:var(--warn)}
 .ba{display:grid;gap:12px;grid-template-columns:1fr 1fr;margin:10px 0}@media(max-width:700px){.ba{grid-template-columns:1fr}}
 .ba>div{border-radius:6px;padding:10px 12px}
@@ -530,6 +535,45 @@ def fmt_metric(key, v) -> str:
     return usd(v) if key == "cost_per_session" else f"{v:g}"
 
 
+def change_tiles(metrics, lo=4, hi=6) -> str:
+    """4 to 6 tiles for the biggest changes: arrow = direction of the number, colour = better (green) or worse (red)."""
+    cand = []
+    for m in metrics:
+        b, a = m.get("before"), m.get("after")
+        if b is None or a is None:
+            continue
+        rel = abs(a - b) / max(abs(a), abs(b), 1e-9)
+        cand.append((rel if rel >= 0.05 else 0, bool(m.get("quick_win")), rel, m))
+    # biggest relative change first; metrics with a known good direction win ties; flat ones only fill up to `lo`
+    cand.sort(key=lambda c: (c[0] > 0, c[0], c[3].get("better") is not None, c[1]), reverse=True)
+    picked = [c for c in cand if c[0] > 0][:hi]
+    picked += [c for c in cand if c[0] == 0][:max(0, lo - len(picked))]
+    if not picked:
+        return ""
+    tiles = ""
+    for _, qw, _, m in picked:
+        b, a, key = m["before"], m["after"], m.get("key")
+        d = a - b
+        if abs(d) < 1e-9 or (abs(d) / max(abs(a), abs(b), 1e-9)) < 0.05:
+            cls, arrow, word = "flat", "&rarr;", "about the same"
+        else:
+            arrow = "&uarr;" if d > 0 else "&darr;"
+            if m.get("better") is None:
+                cls, word = "flat", "changed"
+            else:
+                good = (d > 0) == (m["better"] == "higher")
+                cls, word = ("good", "better") if good else ("bad", "worse")
+        pct = (m.get("label") or "").rstrip().endswith("(%)")
+        amount = (f"{d:+.1f} pts" if pct else (f"{'+' if d > 0 else '-'}${abs(d):.2f}" if key == "cost_per_session" else f"{d:+.2g}")) if cls != "flat" or d else ""
+        label = re.sub(r"\s*\(%\)", "", m.get("label") or "")
+        tiles += (f'<div class="chg {cls}"><div class="chg-l">{esc(label)}</div>'
+                  f'<div class="chg-v"><span class="chg-a" aria-hidden="true">{arrow}</span> {esc(fmt_metric(key, a))}{"%" if pct else ""}</div>'
+                  f'<div class="chg-d">{esc(word)}{(" · " + esc(amount)) if amount else ""}<br>was {esc(fmt_metric(key, b))}{"%" if pct else ""}'
+                  f'{" · quick win" if qw else ""}</div></div>')
+    return ('<div class="chgs">' + tiles + "</div>"
+            '<p class="muted" style="font-size:13px">Arrow: which way the number moved. Green: better. Red: worse. Grey: no clear direction or no real change.</p>')
+
+
 def followup_html(S, I) -> str:
     fu = S.get("followup")
     if not fu:
@@ -554,8 +598,10 @@ def followup_html(S, I) -> str:
             tag = f'<span class="tag {"good" if good else "bad"}">{"better" if good else "worse"}</span>'
         label = esc(m.get("label")) + (' <span class="tag good">quick win</span>' if m.get("quick_win") else "")
         rows.append([label, esc(fmt_metric(m.get("key"), b)), esc(fmt_metric(m.get("key"), a)), tag])
+    body += change_tiles(fu.get("metrics") or [])
     if rows:
-        body += table(["Measure", "Before (last report's sample)", "Since then", ""], rows, raw_cols=(0, 1, 2, 3))
+        body += ("<details><summary>All measures compared</summary>"
+                 + table(["Measure", "Before (last report's sample)", "Since then", ""], rows, raw_cols=(0, 1, 2, 3)) + "</details>")
     adv = fu.get("advice") or []
     if adv:
         cls = {"landed": "good", "partly": "warn", "not found": "bad", "target missing": "warn"}
@@ -618,7 +664,6 @@ def p_overview(S, I):
         meta.append(("Project", flt))
     meta.append(("Task labels", "reviewed" if sessions and heur == 0 else f"{heur} of {len(sessions)} still guessed"))
     body += '<dl class="meta">' + "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in meta) + "</dl>"
-    body += sample_html(S)
     if M["sessions_analyzed"] < 10:
         body += (f'<div class="callout warn"><b>Small sample ({M["sessions_analyzed"]} sessions).</b> Read these findings as leads, not statistics, '
                  "and re-run after more sessions.</div>")
@@ -753,18 +798,29 @@ def playbook_html(key, pid, overrides=None) -> str:
     if not pb:
         return ""
     ov = {o.get("id"): o.get("prompt") for o in overrides or [] if isinstance(o, dict) and o.get("prompt")}
+    ovs = {o.get("id"): o.get("short") for o in overrides or [] if isinstance(o, dict) and o.get("short")}
     out = f'<div class="playbook"><p>{esc(pb["intro"])}</p>'
     out += '<p class="flow"><b>' + " &rarr; ".join(esc(x) for x in pb["flow"]) + "</b></p>"
+    def prompts(ph, label):
+        pid_ = f"{pid}-{ph['id']}"
+        tailored = ph["id"] in ov or ph["id"] in ovs
+        return (f'<p><b>One-liner</b> <span class="muted">(paste as is)</span></p>'
+                + copybox(pid_ + "-s", ovs.get(ph["id"]) or ph["short"], f'{label} one-liner')
+                + f'<details><summary>Full prompt{" (tailored to you)" if tailored else ""}, for a skill</summary>'
+                + f'<p class="sub">Save it as a skill, for example <code>.claude/skills/{esc(ph["skill_name"])}/SKILL.md</code>, and run it as <code>/{esc(ph["skill_name"])}</code>.</p>'
+                + copybox(pid_, ov.get(ph["id"]) or ph["prompt"], f'{label} full prompt') + "</details>")
+
     for n, ph in enumerate(pb["phases"]):
         out += (f'<div class="card"><b>{esc(ph["number"])} · {esc(ph["name"])}</b> <span class="tag">{esc(ph["goal"])}</span>'
                 '<ul class="prose">'
                 f'<li><b>Rule:</b> {esc(ph["rule"])}</li><li><b>Produces:</b> {esc(ph["output"])}</li>'
                 f'<li><b>You check:</b> {esc(ph["you_check"])}</li><li><b>In Claude Code:</b> {esc(ph["tips"])}</li></ul>'
-                + copybox(f"{pid}-{ph['id']}", ov.get(ph["id"]) or ph["prompt"], f'{ph["name"]} prompt' + (" (tailored to you)" if ph["id"] in ov else ""))
-                + "</div>")
+                + prompts(ph, ph["name"]) + "</div>")
     for ex in pb.get("extras") or []:
         out += (f'<div class="card"><b>{esc(ex["name"])}</b> <span class="tag">{esc(ex["when"])}</span>'
-                + copybox(f"{pid}-{ex['id']}", ex["prompt"], "Iterate prompt") + "</div>")
+                + prompts(ex, "Iterate") + "</div>")
+    if pb.get("skill_hint"):
+        out += f'<div class="callout"><b>Make it a skill.</b> {esc(pb["skill_hint"])}</div>'
     out += (f'<p><b>Use it when:</b> {esc(pb["use_when"])}</p><p><b>Skip it when:</b> {esc(pb["skip_when"])}</p>'
             "<p><b>Common mistakes</b></p><ul class=\"prose\">" + "".join(f"<li>{esc(m)}</li>" for m in pb["mistakes"]) + "</ul>"
             f'<p class="muted" style="font-size:13px">{esc(pb["credit"])}</p></div>')
@@ -1258,7 +1314,7 @@ def p_method(S, I):
         if c.get("claude_code_reported_usd") is not None:
             nums.append([f'Cross-check: Claude Code\'s own running figure for the {c["sessions_with_claude_code_figure"]} sessions that record one',
                          f'{usd(c["claude_code_reported_usd"])} (this estimate for the same sessions: {usd(c.get("estimate_same_sessions_usd"))})'])
-    pre = "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
+    pre = "<h3>Sample</h3>" + sample_html(S) + "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
     body = pre + f'<div class="card" style="margin-top:20px"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}. Snapshot kept in {esc(M.get("history_dir") or "the history folder")}.</p>'
     body += "<p><b>Measured:</b> " + esc("; ".join(M["measured"])) + ".</p>"
     if M.get("estimated"):

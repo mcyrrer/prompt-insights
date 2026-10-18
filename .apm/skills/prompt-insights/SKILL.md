@@ -196,7 +196,7 @@ newest earlier snapshot of the same project filter. Snapshots found in an older
    inline SVG. (The warning "unrecognised entry types" lists harness bookkeeping lines that carry no
    prompt data and can be ignored.) Check its output: it prints how many quotes were verified and warns
    about missing sections. Open the file named in the builder's output (`open <file>` on macOS).
-   The Overview tab states how many sessions the report covers and how to include more or fewer.
+   The Method tab states how many sessions the report covers and how to include more or fewer.
    When the user asks for "my last N sessions" use `--limit N`; for "the last N days" use
    `--since-days N` (maximum 7; offer `--limit` beyond that). Do not change those flags unasked.
    Tabs: Overview (quick win, since last report, headlines, numbers), Prompts (scores, weaknesses,

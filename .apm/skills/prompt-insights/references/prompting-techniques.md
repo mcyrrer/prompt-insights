@@ -44,13 +44,17 @@ Principles (from the tutorial, restated for Claude Code):
 | 2 Plan | No code. Ask clarifying questions, give options where several approaches fit, wait for answers. Phases in dependency order. | `thoughts/plans/<date>-<topic>.md` (scope, phases, exact files, checkboxes, automated and manual success criteria, risks) | Read it like a review. Wrong: iterate. |
 | 3 Implement | Read the whole plan, phases in order, verify after each, tick checkboxes, stop and report on mismatch. | The change plus a ticked plan | Manual checks and the diff. |
 
-The dedicated prompts for each phase and for iterating the plan live in
+Each phase has a **one-liner** (paste as is) and a **full prompt**. Suggest keeping the full prompts in
+a skill (`.claude/skills/rpi-research/SKILL.md`, `rpi-plan`, `rpi-implement`, `rpi-iterate`, run as
+`/rpi-research <topic>`) once the user uses RPI more than a few times, because the full text is long
+and a skill gives every project the same rules. The prompts for each phase and for iterating the plan live in
 `assets/technique-playbooks.json`; `build_report.py` renders them in the Techniques tab whenever
 `rpi` is recommended (and in a collapsed section otherwise). So for `rpi`:
 - keep `steps` to 3 to 5 lines and say why it fits (session id, number);
 - do not repeat the generic prompts in `example_prompt`; it is not shown when a playbook exists;
 - if the user's sessions give you real terms (paths, features, test commands), pass `phases`:
-  `[{"id": "research", "prompt": "..."}, {"id": "plan", "prompt": "..."}, {"id": "implement", "prompt": "..."}]`.
+  `[{"id": "research", "short": "...", "prompt": "..."}, {"id": "plan", ...}, {"id": "implement", ...}]`
+  (`short` is the one-liner, `prompt` the full text; either may be given alone).
   Keep the structure of the shipped prompt (read-only rule, output file with sections, stop
   conditions) and replace the `<placeholders>` with their real topic, files and checks.
 

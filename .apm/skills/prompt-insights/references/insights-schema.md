@@ -60,7 +60,7 @@ customer names. Keep quotes short.
       "why_for_you": "evidence from the user's sessions",
       "steps": ["3 to 5 short steps"],
       "example_prompt": "written in the user's domain",
-      "phases": [{"id": "research|plan|implement", "prompt": "optional, RPI only: that step's prompt in the user's domain"}],
+      "phases": [{"id": "research|plan|implement", "short": "optional, RPI only: the one-liner in the user's domain", "prompt": "optional, RPI only: the full prompt in the user's domain"}],
       "evidence_sessions": ["..."]
     }
   ],

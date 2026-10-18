@@ -3,7 +3,11 @@
   "rpi": {
     "credit": "Adapted from the Research, Plan, Implement workflow in the goose tutorial.",
     "intro": "One goal per session. Each phase runs in its own fresh session (/clear) and ends in a file, so the file is the hand-off and the memory. You review after Research and after Plan, which is where a fix costs minutes instead of an hour.",
-    "flow": ["Research", "Plan", "Implement"],
+    "flow": [
+      "Research",
+      "Plan",
+      "Implement"
+    ],
     "phases": [
       {
         "id": "research",
@@ -14,7 +18,9 @@
         "output": "thoughts/research/<date>-<topic>.md: summary, how it works, path:line references, patterns, tests, open questions.",
         "you_check": "Is it accurate and about the right thing? Too broad: stop and rerun with a narrower topic. Everything later rests on this file.",
         "tips": "Plan mode (Shift+Tab) keeps it read-only. Searching and reading can go to subagents (for example the Explore agent) so the main context stays small.",
-        "prompt": "Phase 1 of 3: RESEARCH. Read only. Do not edit any file and do not suggest changes.\n\nTopic: <one narrow question, e.g. how <feature> works today>\nStart from: <paths, modules or entry points you already know>\n\nDocument what exists today. No opinions, no critique, no plan.\n- Use parallel subagents: one to locate the relevant files, one to read them and explain how they work, one to find similar features and conventions.\n- Back every claim with path:line.\n\nWrite the result to thoughts/research/<YYYY-MM-DD>-<topic>.md with these sections:\n1. Summary (5 lines at most)\n2. How it works today (the flow, step by step)\n3. Files and code references (path:line, one line each)\n4. Patterns and conventions in use\n5. Tests that cover it\n6. Open questions for me\n\nIf the topic turns out to be much wider than one question, stop and tell me instead of researching all of it."
+        "prompt": "Phase 1 of 3: RESEARCH. Read only. Do not edit any file and do not suggest changes.\n\nTopic: <one narrow question, e.g. how <feature> works today>\nStart from: <paths, modules or entry points you already know>\n\nDocument what exists today. No opinions, no critique, no plan.\n- Use parallel subagents: one to locate the relevant files, one to read them and explain how they work, one to find similar features and conventions.\n- Back every claim with path:line.\n\nWrite the result to thoughts/research/<YYYY-MM-DD>-<topic>.md with these sections:\n1. Summary (5 lines at most)\n2. How it works today (the flow, step by step)\n3. Files and code references (path:line, one line each)\n4. Patterns and conventions in use\n5. Tests that cover it\n6. Open questions for me\n\nIf the topic turns out to be much wider than one question, stop and tell me instead of researching all of it.",
+        "short": "Research <topic> in read-only mode: document how it works today with path:line references, no opinions and no edits, and write it to thoughts/research/<date>-<topic>.md with open questions at the end.",
+        "skill_name": "rpi-research"
       },
       {
         "id": "plan",
@@ -25,7 +31,9 @@
         "output": "thoughts/plans/<date>-<topic>.md: scope, phases in dependency order, exact files, checkboxes, automated and manual success criteria.",
         "you_check": "Read it like a code review. Wrong or missing: use the Iterate prompt below to edit the plan in place instead of starting over.",
         "tips": "Start a new session and point it at the research file. Plan mode keeps it from editing. A stronger model for planning and a cheaper one for implementing can fit (see the opusplan alias in the model configuration docs).",
-        "prompt": "Phase 2 of 3: PLAN. Do not edit any code.\n\nGoal: <the change, in one or two sentences>\nInput: thoughts/research/<file>.md (read all of it first)\n\n1. Ask me the clarifying questions you need (scope, remove or deprecate, config, tests, docs). Wait for my answers.\n2. Where more than one reasonable approach exists, give 2 or 3 options with trade-offs and recommend one. Wait for my choice.\n3. Then write thoughts/plans/<YYYY-MM-DD>-<topic>.md with:\n   - Overview and what is out of scope\n   - Phases in dependency order (core first, then integration points, then UI or CLI, then docs)\n   - Per phase: exact file paths, the change (a short description or snippet) and a checkbox list\n   - Success criteria per phase, split into Automated (the exact commands to run) and Manual (what I check by hand)\n   - Risks and how to roll back\n\nThe plan must be detailed enough that a fresh session with no memory of this one can execute it. Stop after writing the file."
+        "prompt": "Phase 2 of 3: PLAN. Do not edit any code.\n\nGoal: <the change, in one or two sentences>\nInput: thoughts/research/<file>.md (read all of it first)\n\n1. Ask me the clarifying questions you need (scope, remove or deprecate, config, tests, docs). Wait for my answers.\n2. Where more than one reasonable approach exists, give 2 or 3 options with trade-offs and recommend one. Wait for my choice.\n3. Then write thoughts/plans/<YYYY-MM-DD>-<topic>.md with:\n   - Overview and what is out of scope\n   - Phases in dependency order (core first, then integration points, then UI or CLI, then docs)\n   - Per phase: exact file paths, the change (a short description or snippet) and a checkbox list\n   - Success criteria per phase, split into Automated (the exact commands to run) and Manual (what I check by hand)\n   - Risks and how to roll back\n\nThe plan must be detailed enough that a fresh session with no memory of this one can execute it. Stop after writing the file.",
+        "short": "Read thoughts/research/<file>.md, ask me your clarifying questions first, then write a phased plan to thoughts/plans/<date>-<topic>.md with exact files, checkboxes and automated and manual success criteria. No code.",
+        "skill_name": "rpi-plan"
       },
       {
         "id": "implement",
@@ -36,7 +44,9 @@
         "output": "The change, with the plan's checkboxes ticked as each phase passes.",
         "you_check": "Start it and step away unless the plan lists manual steps. At the end, run the manual checks and review the diff.",
         "tips": "New session, then point at the plan only. If the context fills up and compacts, the ticked checkboxes tell it where to resume.",
-        "prompt": "Phase 3 of 3: IMPLEMENT. Plan: thoughts/plans/<file>.md\n\nRead the whole plan first. Then, for each phase in order:\n1. Make the changes the plan lists, and nothing else.\n2. Run that phase's automated success criteria.\n3. Tick its checkboxes in the plan file.\n4. Go to the next phase only when the checks pass.\n\nStop and report if a check fails twice, or if what you find differs from the plan or the research. Do not improvise a redesign. If the context fills up, resume from the first unticked checkbox. At the end, list the manual checks I still need to do."
+        "prompt": "Phase 3 of 3: IMPLEMENT. Plan: thoughts/plans/<file>.md\n\nRead the whole plan first. Then, for each phase in order:\n1. Make the changes the plan lists, and nothing else.\n2. Run that phase's automated success criteria.\n3. Tick its checkboxes in the plan file.\n4. Go to the next phase only when the checks pass.\n\nStop and report if a check fails twice, or if what you find differs from the plan or the research. Do not improvise a redesign. If the context fills up, resume from the first unticked checkbox. At the end, list the manual checks I still need to do.",
+        "short": "Implement thoughts/plans/<file>.md phase by phase: run each phase's checks, tick its checkboxes, and stop and report if anything differs from the plan.",
+        "skill_name": "rpi-implement"
       }
     ],
     "extras": [
@@ -44,7 +54,9 @@
         "id": "iterate",
         "name": "Iterate the plan (between Plan and Implement)",
         "when": "The plan is wrong or incomplete.",
-        "prompt": "Update thoughts/plans/<file>.md with this feedback: <what is wrong or missing>.\nResearch only what the feedback requires. Edit the plan in place and leave untouched phases as they are. Finish with a list of what you changed. Do not edit any code."
+        "prompt": "Update thoughts/plans/<file>.md with this feedback: <what is wrong or missing>.\nResearch only what the feedback requires. Edit the plan in place and leave untouched phases as they are. Finish with a list of what you changed. Do not edit any code.",
+        "short": "Update thoughts/plans/<file>.md with this feedback: <what is wrong>. Edit it in place, research only what the feedback needs, and list what you changed. No code.",
+        "skill_name": "rpi-iterate"
       }
     ],
     "use_when": "Changes across several files, migrations, refactors, upgrades, unfamiliar code, or work that outlives one sitting.",
@@ -55,6 +67,7 @@
       "Running all three phases in one session, so research noise fills the context before the code is written.",
       "Approving a plan without reading it. A plan error becomes a wrong change in many files.",
       "Restarting when the plan is slightly off, instead of iterating it in place."
-    ]
+    ],
+    "skill_hint": "The one-liners are enough once you know the routine. The full prompts are long, so keep them in a skill instead of pasting them each time: save one as .claude/skills/<skill-name>/SKILL.md (a name, a one-line description, then the prompt as the body) and run it as /<skill-name> with the topic as its argument. Do this when you use RPI more than a few times, or want the same rules in every project."
   }
 }
