@@ -64,6 +64,15 @@ customer names. Keep quotes short.
     }
   ],
 
+  "official_prompts": [
+    {
+      "id": "id from scripts/prompt_library.py, for example plan-a-multi-file",
+      "why_for_you": "evidence from the user's sessions (session id or number)",
+      "prompt": "the library prompt with its {slots} filled in with the user's own terms",
+      "evidence_sessions": ["..."]
+    }
+  ],
+
   "agent_files": {
     "update_pattern": "how often, when and why agent files get updated, with counts",
     "findings": [
@@ -154,6 +163,9 @@ customer names. Keep quotes short.
   `occurrences: 1`, labelled "stated once" in `theme`; never inflate the count.
 - **Techniques**: 1 to 3, chosen with `references/prompting-techniques.md`; at least one when any
   weakness is about scope, task size, missing checks or unfamiliar code.
+- **Official prompts**: 0 to 3, chosen with `references/prompt-library.md`. The `id` must exist in
+  `scripts/prompt_library.py`; the builder skips unknown ids with a warning. Each needs `why_for_you`
+  with evidence. Optional: leave the list out when nothing in the sessions fits.
 - **Templates**: 3 to 5, one per most common task type in `aggregates.by_task_type` (use the
   corrected labels). Fill all five fields; `<placeholders>` only for what you cannot know.
 - **Repeated corrections**: an occurrence is a separate session where the user states the same

@@ -81,6 +81,14 @@
     "key_difference": "Example: the best session stated what must not change.",
     "comparable": true
   },
+  "official_prompts": [
+    {
+      "id": "plan-a-multi-file",
+      "why_for_you": "Example: s1 asked for a refactor across several files and had to undo edits at turn 2.",
+      "prompt": "plan how to refactor the <module> to <goal>. list the files you would change, but don't edit anything yet",
+      "evidence_sessions": ["s1"]
+    }
+  ],
   "techniques": [
     {
       "id": "staged",

@@ -107,6 +107,9 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
    - *Techniques:* read `references/prompting-techniques.md`, match the user's weaknesses to
      1 to 3 techniques (RPI, plan mode, staged delivery, verify loop, ...), and give each an
      example prompt in the user's own domain.
+   - *Official prompts:* read `references/prompt-library.md`. Where a weakness or technique has a
+     matching prompt in the official Claude Code prompt library, add 0 to 3 `official_prompts` with
+     the library `id`, the evidence, and the prompt filled in with the user's own terms.
    - *Agent files:* use `agent_files`, `project_roots`, `agent_file_edit_events`,
      `repeated_corrections`, `repeated_instructions` and `skills_never_triggered_in_sample`. A skill
      the user invokes by slash command is in `skills_invoked_by_slash`, so it is in use even if the
@@ -216,5 +219,6 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
 - `scripts/history.py`: report snapshots and the follow-up comparison.
 - `references/insights-schema.md`: the exact `insights.json` shape, writing rules and source ids.
 - `references/prompting-techniques.md`: RPI and other techniques, and how to match them to the data.
+- `references/prompt-library.md` and `scripts/prompt_library.py`: official Claude Code prompts and how to match them to the data.
 - `references/model-routing.md`: how to judge model fit; read before the model section.
 - `assets/example-insights.json`: structural example only.

@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from history import snapshot  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
 from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL  # noqa: E402
+from prompt_library import LIBRARY  # noqa: E402
 from redact import compile_extra, redact  # noqa: E402
 
 # Colour roles: blue = actions and links only; red and green = removed and added text (and bad/good status);
@@ -224,6 +225,7 @@ SOURCES = {
     "permissions": ("Configure permissions: allow, ask and deny rules", CC + "permissions"),
     "settings": ("Claude Code settings files", CC + "settings"),
     "pricing": ("Claude API pricing (the list prices behind the cost estimate)", PRICING_URL),
+    "prompt-library": ("Prompt library (official Claude Code prompts)", CC + "prompt-library"),
     "prompting": ("Prompting best practices (Claude Platform docs)",
                   "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"),
     "context-eng": ("Effective context engineering for AI agents (Anthropic engineering)",
@@ -662,10 +664,36 @@ def p_techniques(S, I):
         if t.get("evidence_sessions"):
             body += f'<p class="muted">Evidence: {esc(", ".join(t["evidence_sessions"]))}</p>'
         body += "</div>"
-    used = {t.get("id") for t in recs}
+    body += official_prompts_html(I)
     body += (f'<details><summary>Technique catalog ({len(TECHNIQUES)})</summary>'
              + table(["Technique", "What it is", "Use it when"], [[t[1], t[2], t[3]] for t in TECHNIQUES]) + "</details>")
+    body += (f'<details><summary>Official prompt library ({len(LIBRARY)})</summary>'
+             '<p class="sub">Every prompt from the Claude Code prompt library. Replace the {braces} with your own terms.</p>'
+             + table(["Phase", "Task", "Prompt"], [[p[1], p[2], p[3]] for p in LIBRARY]) + "</details>")
     return "Techniques", body
+
+
+LIB = {p[0]: p for p in LIBRARY}
+
+
+def official_prompts_html(I) -> str:
+    """Prompts from the official library that fit this user. insights.json names them by id and supplies
+    the filled-in text; the library text itself comes from prompt_library.py, never from insights.json."""
+    recs = [r for r in I.get("official_prompts") or [] if r.get("id") in LIB]
+    if not recs:
+        return ""
+    body = ('<h3>Official prompts to try</h3><p class="sub">Taken from the '
+            f'{source_anchor("prompt-library")}, filled in with your own project terms.</p>')
+    for i, r in enumerate(recs):
+        _, phase, cat, text = LIB[r["id"]]
+        body += (f'<div class="card"><span class="tag">{esc(phase)}</span><span class="tag">{esc(cat)}</span>')
+        if r.get("why_for_you"):
+            body += f'<p><b>Why it fits you:</b> {esc(r["why_for_you"])}</p>'
+        body += copybox(f"op{i}", r.get("prompt") or text, "Prompt library")
+        if r.get("evidence_sessions"):
+            body += f'<p class="muted">Evidence: {esc(", ".join(r["evidence_sessions"]))}</p>'
+        body += "</div>"
+    return body
 
 
 def p_agent_files(S, I):
@@ -980,6 +1008,8 @@ def p_plan(S, I):
     reading = ["best-practices", "claude-md", "prompting"]
     for t in I.get("techniques") or []:
         reading += TECH_SOURCES.get(t.get("id"), [])
+    if I.get("official_prompts"):
+        reading.append("prompt-library")
     items = "".join(f"<li>{source_anchor(i)}</li>" for i in dict.fromkeys(reading) if i in SOURCES)
     body = f'<div class="cols">{cols}</div>'
     body += ('<h3>Further reading</h3><div class="card"><p class="sub">Anthropic documentation for the techniques and settings above. '
@@ -1089,6 +1119,11 @@ def main() -> int:
         print(f"Saved a copy for the next run's follow-up in {d}")
     if missing:
         print("WARNING: insights.json is missing: " + ", ".join(missing))
+    unknown = [r.get("id") for r in I.get("official_prompts") or [] if r.get("id") not in LIB]
+    if unknown:
+        print("WARNING: official_prompts ids not in the prompt library, skipped: " + ", ".join(map(str, unknown)))
+    elif not I.get("official_prompts"):
+        print("NOTE: insights.json has no official_prompts; the Techniques tab shows only the library catalogue.")
     return 0
 
 
