@@ -241,3 +241,5 @@ newest earlier snapshot of the same project filter. Snapshots found in an older
 - `scripts/context.py`: context-window measurements and flags used by the analyzer.
 - `assets/example-insights.json`: structural example only.
 - `assets/prompt-library.json`: the official prompt library data (copied from the docs page, with the origin of each prompt).
+- `assets/technique-playbooks.json`: per-phase prompts for multi-step techniques (RPI).
+- `assets/logo.png`: the logo embedded in the report header.

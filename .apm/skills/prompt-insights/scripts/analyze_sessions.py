@@ -100,7 +100,7 @@ SCOPE_RE = re.compile(
 CONTEXT_RE = re.compile(
     r"(`[^`]+`|@\S+|\b[\w\-.]+/[\w\-./]+|\b[\w\-]+\.(?:py|js|ts|tsx|go|rs|java|kt|yml|yaml|json|md|sh|tf|groovy|swift|cs|rb)\b|https?://)")
 DONE_RE = re.compile(
-    r"(?i)\b(tests? (pass|should)|run (the )?(tests?|lint|build|make|npm|pytest|pnpm|yarn|go test)|"
+    r"(?i)\bdone\s*:|\b(tests? (pass|should)|run (the )?(tests?|lint|build|make|npm|pytest|pnpm|yarn|go test)|"
     r"make (test|lint|build)|verify|done when|when (done|finished)|lint(er)?|should (output|return|print|pass)|expected|acceptance|until (it|the|all) )\b")
 PLAN_RE = re.compile(
     r"(?i)\b(plan first|make a plan|propose|outline (an )?approach|before (you )?(edit|code|change|writing)|"
@@ -256,6 +256,14 @@ def add_agent_edit(store, path, tool, ts):
         return
     rec = store.setdefault((path, tool), {"path": path, "tool": tool, "ts": ts, "count": 0})
     rec["count"] += 1
+
+
+def folder_to_cwd(name: str):
+    """Work dir from the project folder name under ~/.claude/projects (every non-alphanumeric character became '-').
+    Only a fallback for transcripts that record no cwd: names that contained '-' or '.' cannot be recovered exactly."""
+    if not name.startswith("-"):
+        return None
+    return tilde("/" + name[1:].replace("-", "/"))
 
 
 def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagents=True) -> dict:
@@ -573,7 +581,9 @@ def parse_session(path: Path, extra, labels: dict, overrides=None, with_subagent
         "session_id": sid,
         "_cwd": cwd,
         "_start": ts_all[0] if ts_all else None,
-        "cwd": tilde(cwd) if cwd else None,
+        "cwd": tilde(cwd) if cwd else folder_to_cwd(path.parent.name),
+        "cwd_source": "transcript" if cwd else "folder name (approximate)",
+        "file": tilde(str(path)),
         "start": ts_all[0].isoformat() if ts_all else None,
         "end": ts_all[-1].isoformat() if ts_all else None,
         "duration_min": round((ts_all[-1] - ts_all[0]).total_seconds() / 60, 1) if len(ts_all) > 1 else 0,

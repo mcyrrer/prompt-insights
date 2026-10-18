@@ -23,7 +23,7 @@ apply in five minutes at the top of the first tab.
 | **Models & cost** | Messages and tokens per model and effort level, estimated cost by model, task type, subagent type and workflow, the most expensive sessions and why, context-window use (peak size, startup size, cache restarts after idle, missing /clear and /compact, with fixes; assumes a subscription's 1-hour cache), task-type vs model matrix, models that look too heavy or too light |
 | **Templates** | Reusable prompts for your most common task types: goal, context, constraints, approach, done-when |
 | **Action plan** | Do now / this month / ongoing, with links to Anthropic's own documentation |
-| **Method** | What was measured vs guessed, which sessions are included and how to include more or fewer, warnings and limits |
+| **Method** | What was measured vs guessed, every analysed session (start time, work directory, title, task, model), how to include more or fewer, warnings and limits |
 
 ## Requirements
 
@@ -200,7 +200,7 @@ apm.yml                               package manifest
   scripts/                            analyze_sessions.py, build_report.py, pricing.py, subagents.py,
                                       settings_scan.py, history.py, outdir.py, redact.py
   references/                         report schema, prompting techniques, prompt library, model routing
-  assets/                             example-insights.json (structure only), prompt-library.json (official prompts)
+  assets/                             example-insights.json (structure only), prompt-library.json (official prompts), technique-playbooks.json (RPI prompts), logo.png (report header)
 ```
 
 Validate a change before sending it:

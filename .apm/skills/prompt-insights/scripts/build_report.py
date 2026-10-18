@@ -13,6 +13,7 @@ one after the other, so the file still reads correctly in a viewer that blocks s
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import re
@@ -30,6 +31,11 @@ from redact import compile_extra, redact  # noqa: E402
 _LIB_DATA = json.loads((Path(__file__).resolve().parent.parent / "assets" / "prompt-library.json").read_text(encoding="utf-8"))
 LIB_META, LIB_SOURCES, LIBRARY = _LIB_DATA["library"], _LIB_DATA["sources"], _LIB_DATA["prompts"]
 LIB = {p["id"]: p for p in LIBRARY}
+# Logo shipped with the skill (assets/logo.png), embedded as a data URI so the report stays one offline file.
+_LOGO = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+LOGO_HTML = ('<img src="data:image/png;base64,' + base64.b64encode(_LOGO.read_bytes()).decode("ascii")
+             + '" alt="Claude Code prompt insights" width="280" height="95">') if _LOGO.is_file() else "Claude Code prompt insights"
+
 # Multi-step playbooks (RPI) with a dedicated prompt per step, shipped with the skill.
 PLAYBOOKS = {k: v for k, v in json.loads((Path(__file__).resolve().parent.parent / "assets" / "technique-playbooks.json")
                                           .read_text(encoding="utf-8")).items() if not k.startswith("_")}
@@ -70,6 +76,7 @@ CSS = (":root{" + LIGHT + "}\n"
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--sans)}
 header.top{max-width:980px;margin:0 auto;padding:22px 16px 8px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 header.top h1{font:600 26px/1.2 var(--serif);margin:0 0 4px;letter-spacing:-.01em}
+header.top h1 img{display:block;max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:10px}
 .themebtn{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
 .themebtn:hover{background:var(--code)}
 a{color:var(--accent)}
@@ -1296,6 +1303,24 @@ def p_plan(S, I):
     return "Action plan", body
 
 
+def sessions_html(S) -> str:
+    """Every analysed session: when it started, where it ran, what it was."""
+    rows = []
+    for s in sorted(S.get("sessions") or [], key=lambda x: x.get("start") or "", reverse=True):
+        start = (s.get("start") or "")[:16].replace("T", " ")
+        wd = s.get("cwd") or "?"
+        if str(s.get("cwd_source", "")).startswith("folder"):
+            wd += " (from folder name)"
+        rows.append([f'<span style="white-space:nowrap">{esc(start or "?")}</span>', f'<code>{esc(wd)}</code>', esc(s.get("title") or s.get("first_prompt", "")[:60] or "-"),
+                     esc(s.get("task_type") or "-"), esc(s.get("primary_model") or "-"), esc(s.get("user_turns", 0)),
+                     f'<code>{esc(str(s.get("id", ""))[:8])}</code>'])
+    n = len(rows)
+    return (f'<h3>Sessions analysed ({n})</h3><p class="sub">Newest first. Time is when the session started, in UTC. '
+            'The work directory is read from the transcript (or, when it records none, from the project folder name).</p>'
+            f'<details{" open" if n <= 25 else ""}><summary>{n} session{"s" if n != 1 else ""}</summary>'
+            + table(["Started (UTC)", "Work directory", "Title", "Task", "Model", "Typed prompts", "Id"], rows, raw_cols=range(7)) + "</details>")
+
+
 def p_method(S, I):
     M, A, T = S["meta"], S["aggregates"], S["aggregates"]["totals"]
     auto = sum((A.get("automated_turns_excluded") or {}).values())
@@ -1314,7 +1339,7 @@ def p_method(S, I):
         if c.get("claude_code_reported_usd") is not None:
             nums.append([f'Cross-check: Claude Code\'s own running figure for the {c["sessions_with_claude_code_figure"]} sessions that record one',
                          f'{usd(c["claude_code_reported_usd"])} (this estimate for the same sessions: {usd(c.get("estimate_same_sessions_usd"))})'])
-    pre = "<h3>Sample</h3>" + sample_html(S) + "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
+    pre = "<h3>Sample</h3>" + sample_html(S) + sessions_html(S) + "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
     body = pre + f'<div class="card" style="margin-top:20px"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}. Snapshot kept in {esc(M.get("history_dir") or "the history folder")}.</p>'
     body += "<p><b>Measured:</b> " + esc("; ".join(M["measured"])) + ".</p>"
     if M.get("estimated"):
@@ -1354,7 +1379,7 @@ def build(S, I) -> str:
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude Code prompt insights</title>'
             f'<script>{THEME_INIT}</script><style>{CSS}</style></head><body>'
-            '<header class="top"><div><h1>Claude Code prompt insights</h1>'
+            f'<header class="top"><div><h1>{LOGO_HTML}</h1>'
             '<p class="sub">Built from your local session transcripts. Quotes are redacted; review them before sharing.</p></div>'
             '<button id="theme" class="themebtn" type="button" aria-label="Switch between system, light and dark theme">Theme: system</button></header>'
             f'<nav class="tabs" role="tablist" aria-label="Report sections">{tabs}</nav><main>{panels}</main>'
