@@ -28,10 +28,17 @@ asks for another location.
 or `~/.claude/skills/prompt-insights`). Run the commands from the user's project folder with the
 full path to the scripts, so that `./prompt-insights/` is created in the right place.
 
+Report snapshots (used for the follow-up between runs) are kept outside the project, in one folder
+for all projects: **`~/.claude/prompt-insights/history/<timestamp>/`**. Override it with
+`--history-dir DIR` on both scripts or with the `PROMPT_INSIGHTS_HISTORY` environment variable (the
+option wins). Each snapshot records its `--project` filter, and a run is only compared with the
+newest earlier snapshot of the same project filter. Snapshots found in an older
+`./prompt-insights/history/` are copied over automatically.
+
 ## Safety rules
 
-- Read-only on `~/.claude` and on all repos. The only files you create are in `./prompt-insights/`
-  (and the one-line `.gitignore` entry described above).
+- Read-only on `~/.claude/projects` and on all repos. The only files you create are in
+  `./prompt-insights/`, in the history folder above, and the one-line `.gitignore` entries described above.
 - Redaction happens in the scripts. Still never quote secrets, tokens, internal hostnames or
   customer names. If the user names internal terms to hide, pass them with `--extra-redact REGEX`.
 - Python 3.9+ standard library only; nothing to install.
@@ -53,9 +60,10 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
    This writes `prompt-insights/summary.json` and `prompt-insights/labels.todo.json`. It also reads
    each session's subagent and workflow-agent transcripts (`<session-id>/subagents/`), the hooks and
    permission rules in settings files (only those two keys), and, when an earlier report was saved in
-   `prompt-insights/history/`, compares this run with it (`followup`).
+   the history folder, compares this run with it (`followup`).
    Flags: `--project TEXT` (one project; also narrows the agent-file inventory to that project),
-   `--since-days N`, `--limit 0` (all; `--limit` counts sessions kept after exclusions),
+   `--since-days N` (1 to 7 only; for a longer period use `--limit`), `--limit N` (the N most recent
+   sessions; `--limit 0` = all; `--limit` counts sessions kept after exclusions),
    `--exclude-session ID` (repeatable: use it for earlier look-alike analysis runs that did not
    invoke this skill and would add noise), `--prices prices.json` (overrides the built-in list prices
    for matching models), `--no-subagents` (faster, but subagent models and cost go missing),
@@ -106,7 +114,9 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
      weaknesses with before/after rewrites, 3 strengths, and a best/worst comparison.
    - *Techniques:* read `references/prompting-techniques.md`, match the user's weaknesses to
      1 to 3 techniques (RPI, plan mode, staged delivery, verify loop, ...), and give each an
-     example prompt in the user's own domain.
+     example prompt in the user's own domain. `rpi` ships with a dedicated prompt per phase
+     (Research, Plan, Implement, plus iterate); give it `phases` only to tailor them, see the
+     RPI section of that file.
    - *Official prompts:* read `references/prompt-library.md`. Where a weakness or technique has a
      matching prompt in the official Claude Code prompt library, add 0 to 3 `official_prompts` with
      the library `id`, the evidence, and the prompt filled in with the user's own terms.
@@ -180,17 +190,20 @@ full path to the scripts, so that `./prompt-insights/` is created in the right p
    python3 SKILL_DIR/scripts/build_report.py --summary prompt-insights/summary.json \
        --insights prompt-insights/insights.json
    ```
-   The result, `prompt-insights/claude-prompt-insights.html`, is one self-contained HTML file with tabs
+   The result, `prompt-insights/claude-prompt-insights-<UTC timestamp>.html`, is one self-contained HTML file with tabs
    and a theme button that switches between system, light and dark. The builder re-redacts, refuses to
    write a page that loads external resources (links the reader clicks are fine), and renders charts as
    inline SVG. (The warning "unrecognised entry types" lists harness bookkeeping lines that carry no
    prompt data and can be ignored.) Check its output: it prints how many quotes were verified and warns
-   about missing sections. Open the file with `open prompt-insights/claude-prompt-insights.html` on macOS.
+   about missing sections. Open the file named in the builder's output (`open <file>` on macOS).
+   The Overview tab states how many sessions the report covers and how to include more or fewer.
+   When the user asks for "my last N sessions" use `--limit N`; for "the last N days" use
+   `--since-days N` (maximum 7; offer `--limit` beyond that). Do not change those flags unasked.
    Tabs: Overview (quick win, since last report, headlines, numbers), Prompts (scores, weaknesses,
    strengths, best vs worst, how sessions ended), Techniques, Agent files, Hooks & permissions,
    Models & cost (effort, estimated cost, subagents, workflows), Templates, Action plan (with doc
    links), Method (limits, warnings, cost cross-check). The builder then copies `summary.json` and
-   `insights.json` to `prompt-insights/history/<timestamp>/` so the next run can follow up
+   `insights.json` and the report to `~/.claude/prompt-insights/history/<timestamp>/` so the next run can follow up
    (`--no-snapshot` skips this).
 
 9. **Reply in chat** with the file path and a short plain-text summary: the quick win, the

@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep the installed skill folder free of __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from history import snapshot  # noqa: E402
+from history import ENV_VAR, resolve_history_dir, snapshot, stamp_of  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
 from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL  # noqa: E402
 from redact import compile_extra, redact  # noqa: E402
@@ -30,6 +30,9 @@ from redact import compile_extra, redact  # noqa: E402
 _LIB_DATA = json.loads((Path(__file__).resolve().parent.parent / "assets" / "prompt-library.json").read_text(encoding="utf-8"))
 LIB_META, LIB_SOURCES, LIBRARY = _LIB_DATA["library"], _LIB_DATA["sources"], _LIB_DATA["prompts"]
 LIB = {p["id"]: p for p in LIBRARY}
+# Multi-step playbooks (RPI) with a dedicated prompt per step, shipped with the skill.
+PLAYBOOKS = {k: v for k, v in json.loads((Path(__file__).resolve().parent.parent / "assets" / "technique-playbooks.json")
+                                          .read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
 
 def link(label, url) -> str:
@@ -178,8 +181,8 @@ show((location.hash||'').slice(1)||tabs[0].dataset.tab,false);
 # Longer guidance lives in references/prompting-techniques.md.
 TECHNIQUES = [
     ("rpi", "RPI: Research, Plan, Implement",
-     "Three separate steps. Research writes findings to a file and changes no code. Plan turns them into numbered steps you review. "
-     "Implement follows the plan in a fresh context.",
+     "Three separate sessions, each ending in a file. Research documents what exists (no opinions, no edits). Plan turns it into phased steps "
+     "with success criteria that you review. Implement follows the plan mechanically, ticking checkboxes. A dedicated prompt for each step is below.",
      "Unfamiliar code, changes that touch several files, or anything you would not finish in one sitting."),
     ("plan-mode", "Plan mode / plan before editing",
      "Ask for a plan and say 'do not edit yet' (or press Shift+Tab to plan mode). Approve or correct the plan, then let it run.",
@@ -565,6 +568,41 @@ def followup_html(S, I) -> str:
     return body
 
 
+def sample_html(S) -> str:
+    """How many sessions the report covers and how to change that."""
+    M = S["meta"]
+    F = M.get("filters") or {}
+    n = M["sessions_analyzed"]
+    avail = M.get("sessions_in_filter") or M["sessions_available_total"]
+    cap = M.get("max_since_days", 7)
+    what = f"{n} session{'s' if n != 1 else ''}"
+    if M.get("date_range"):
+        what += f' from {M["date_range"][0]} to {M["date_range"][1]}'
+    chosen = []
+    if F.get("limit"):
+        chosen.append(f'the {F["limit"]} most recent sessions')
+    else:
+        chosen.append("all sessions")
+    if F.get("since_days"):
+        chosen.append(f'from the last {F["since_days"]} day{"s" if F["since_days"] != 1 else ""}')
+    if F.get("project"):
+        chosen.append(f'of projects matching "{F["project"]}"')
+    more = ""
+    left = avail - n - (M.get("sessions_self_excluded") or 0)
+    if left > 0:
+        more = f" {left} more {'matching ' if (F.get('project') or F.get('since_days')) else ''}session{'s' if left != 1 else ''} exist and are not included."
+    out = ('<div class="card"><p><b>Included in this report:</b> ' + esc(what) + ". Selection: " + esc(" ".join(chosen)) + "." + esc(more) + "</p>"
+           "<p><b>Change the sample.</b> Ask Claude Code in plain language, or pass a flag to <code>analyze_sessions.py</code> and build the report again.</p>"
+           + '<ul class="prose">' + "".join(f"<li>{x}</li>" for x in [
+                  "More or fewer sessions: <code>--limit N</code> (<code>--limit 0</code> = every session). Ask for example: \u201cRun prompt insights on my last 40 sessions.\u201d",
+                  f"A time window: <code>--since-days N</code>, N from 1 to {int(cap)}. Ask for example: \u201cRun prompt insights on the last 7 days.\u201d "
+                  "For a longer period use <code>--limit</code>.",
+                  "One project only: <code>--project TEXT</code>. The follow-up then compares with earlier reports of the same project."]) + "</ul>"
+           + copybox("smp1", "Run prompt insights on my last 40 sessions", "Ask Claude Code")
+           + copybox("smp2", "Run prompt insights on the last 7 days", "Ask Claude Code") + "</div>")
+    return out
+
+
 def p_overview(S, I):
     A, T, M = S["aggregates"], S["aggregates"]["totals"], S["meta"]
     body = ""
@@ -580,6 +618,7 @@ def p_overview(S, I):
         meta.append(("Project", flt))
     meta.append(("Task labels", "reviewed" if sessions and heur == 0 else f"{heur} of {len(sessions)} still guessed"))
     body += '<dl class="meta">' + "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in meta) + "</dl>"
+    body += sample_html(S)
     if M["sessions_analyzed"] < 10:
         body += (f'<div class="callout warn"><b>Small sample ({M["sessions_analyzed"]} sessions).</b> Read these findings as leads, not statistics, '
                  "and re-run after more sessions.</div>")
@@ -708,6 +747,30 @@ def p_prompts(S, I):
     return "Prompts", body
 
 
+def playbook_html(key, pid, overrides=None) -> str:
+    """Steps of a multi-step technique, each with its own copyable prompt. overrides: [{id, prompt}] from insights.json."""
+    pb = PLAYBOOKS.get(key)
+    if not pb:
+        return ""
+    ov = {o.get("id"): o.get("prompt") for o in overrides or [] if isinstance(o, dict) and o.get("prompt")}
+    out = f'<div class="playbook"><p>{esc(pb["intro"])}</p>'
+    out += '<p class="flow"><b>' + " &rarr; ".join(esc(x) for x in pb["flow"]) + "</b></p>"
+    for n, ph in enumerate(pb["phases"]):
+        out += (f'<div class="card"><b>{esc(ph["number"])} · {esc(ph["name"])}</b> <span class="tag">{esc(ph["goal"])}</span>'
+                '<ul class="prose">'
+                f'<li><b>Rule:</b> {esc(ph["rule"])}</li><li><b>Produces:</b> {esc(ph["output"])}</li>'
+                f'<li><b>You check:</b> {esc(ph["you_check"])}</li><li><b>In Claude Code:</b> {esc(ph["tips"])}</li></ul>'
+                + copybox(f"{pid}-{ph['id']}", ov.get(ph["id"]) or ph["prompt"], f'{ph["name"]} prompt' + (" (tailored to you)" if ph["id"] in ov else ""))
+                + "</div>")
+    for ex in pb.get("extras") or []:
+        out += (f'<div class="card"><b>{esc(ex["name"])}</b> <span class="tag">{esc(ex["when"])}</span>'
+                + copybox(f"{pid}-{ex['id']}", ex["prompt"], "Iterate prompt") + "</div>")
+    out += (f'<p><b>Use it when:</b> {esc(pb["use_when"])}</p><p><b>Skip it when:</b> {esc(pb["skip_when"])}</p>'
+            "<p><b>Common mistakes</b></p><ul class=\"prose\">" + "".join(f"<li>{esc(m)}</li>" for m in pb["mistakes"]) + "</ul>"
+            f'<p class="muted" style="font-size:13px">{esc(pb["credit"])}</p></div>')
+    return out
+
+
 def p_techniques(S, I):
     recs = I.get("techniques") or []
     body = '<p class="sub">Ways of working with the agent that fit the patterns in your sessions. The first one is the most useful to try.</p>'
@@ -726,12 +789,19 @@ def p_techniques(S, I):
             body += "<ol>" + "".join(f"<li>{esc(x)}</li>" for x in t["steps"]) + "</ol>"
         elif base:
             body += f"<p>{esc(base[2])}</p>"
-        if t.get("example_prompt"):
+        if t.get("id") in PLAYBOOKS:
+            body += playbook_html(t["id"], f"tq{i}", t.get("phases"))
+        elif t.get("example_prompt"):
             body += f'<p><b>Example prompt</b></p>{copybox(f"tq{i}", t["example_prompt"])}'
         if t.get("evidence_sessions"):
             body += f'<p class="muted">Evidence: {esc(", ".join(t["evidence_sessions"]))}</p>'
         body += "</div>"
     body += official_prompts_html(I)
+    shown = {r.get("id") for r in recs}
+    for key, pb in PLAYBOOKS.items():
+        if key not in shown:  # not recommended this time: keep the prompts one click away
+            title = next((x[1] for x in TECHNIQUES if x[0] == key), key)
+            body += f'<details><summary>{esc(title)}: a prompt for each step</summary>{playbook_html(key, "pbk-" + key)}</details>'
     body += (f'<details><summary>Technique catalog ({len(TECHNIQUES)})</summary>'
              + table(["Technique", "What it is", "Use it when"], [[t[1], t[2], t[3]] for t in TECHNIQUES]) + "</details>")
     body += (f'<details><summary>Official prompt library ({len(LIBRARY)})</summary>'
@@ -1189,7 +1259,7 @@ def p_method(S, I):
             nums.append([f'Cross-check: Claude Code\'s own running figure for the {c["sessions_with_claude_code_figure"]} sessions that record one',
                          f'{usd(c["claude_code_reported_usd"])} (this estimate for the same sessions: {usd(c.get("estimate_same_sessions_usd"))})'])
     pre = "<h3>All numbers</h3>" + table(["Measure", "Value"], nums)
-    body = pre + f'<div class="card" style="margin-top:20px"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}.</p>'
+    body = pre + f'<div class="card" style="margin-top:20px"><p><b>Sample:</b> {M["sessions_analyzed"]} of {M["sessions_available_total"]} sessions. Generated {esc(M["generated_at"])}. Snapshot kept in {esc(M.get("history_dir") or "the history folder")}.</p>'
     body += "<p><b>Measured:</b> " + esc("; ".join(M["measured"])) + ".</p>"
     if M.get("estimated"):
         body += "<p><b>Estimated:</b> " + esc("; ".join(M["estimated"])) + "</p>"
@@ -1239,10 +1309,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--summary", required=True)
     ap.add_argument("--insights", required=True)
-    ap.add_argument("--out", default=f"{DEFAULT_DIR}/claude-prompt-insights.html")
+    ap.add_argument("--out", help=f"report file; default {DEFAULT_DIR}/claude-prompt-insights-<UTC timestamp>.html")
+    ap.add_argument("--history-dir", metavar="DIR",
+                    help=f"where the snapshot for the next follow-up is kept; default: ${ENV_VAR} or "
+                         "~/.claude/prompt-insights/history")
     ap.add_argument("--extra-redact", action="append", default=[])
     ap.add_argument("--no-snapshot", action="store_true",
-                    help="do not copy summary.json and insights.json to history/ (the next run compares against that copy)")
+                    help="do not save a snapshot to the history folder (the next run compares against that copy)")
     a = ap.parse_args()
     try:
         S = json.loads(Path(a.summary).read_text())
@@ -1263,13 +1336,15 @@ def main() -> int:
     n_wk = len(I.get("weaknesses") or [])
     print(f"Quotes: {n_ver} verified, {n_bad} flagged, {n_wk - n_ver - n_bad} unchecked or behaviour-only, of {n_wk} weaknesses.")
     missing = [k for k in ("quick_win", "techniques", "templates", "action_plan") if not I.get(k)]
-    out = Path(a.out)
+    out = Path(a.out) if a.out else Path(DEFAULT_DIR) / f"claude-prompt-insights-{stamp_of(S['meta'].get('generated_at'))}.html"
     guard = ensure_output_dir(out.parent)
     out.write_text(page, encoding="utf-8")
     print(f"Wrote {out} ({out.stat().st_size // 1024} KB), offline-safe, {len(PANELS)} tabs | {guard}")
     if not a.no_snapshot:
-        d = snapshot(out.parent, Path(a.summary), Path(a.insights))
-        print(f"Saved a copy for the next run's follow-up in {d}")
+        history_dir = resolve_history_dir(a.history_dir)
+        ensure_output_dir(history_dir)
+        d = snapshot(history_dir, Path(a.summary), Path(a.insights), out)
+        print(f"Saved a copy (data and report) for the next run's follow-up in {d}")
     if missing:
         print("WARNING: insights.json is missing: " + ", ".join(missing))
     unknown = [r.get("id") for r in I.get("official_prompts") or [] if r.get("id") not in LIB]

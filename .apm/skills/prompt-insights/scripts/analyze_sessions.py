@@ -28,7 +28,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # keep the installed skill folder free of __pycache__
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context import BIG_RESULT_TOKENS, context_flags, result_tokens, session_context  # noqa: E402
-from history import find_previous, followup  # noqa: E402
+from history import ENV_VAR, find_previous, followup, migrate_legacy, resolve_history_dir  # noqa: E402
 from outdir import DEFAULT_DIR, ensure_output_dir  # noqa: E402
 from pricing import DISCLAIMER, PRICES_AS_OF, PRICING_URL, context_tokens, price_usage  # noqa: E402
 from redact import compile_extra, redact, tilde, truncate  # noqa: E402
@@ -1331,14 +1331,29 @@ def mode_show(path: Path, extra, max_chars: int, max_lines: int, turns):
     return 0
 
 
+MAX_SINCE_DAYS = 7
+
+
+def days_arg(v):
+    n = int(v)
+    if not 1 <= n <= MAX_SINCE_DAYS:
+        raise argparse.ArgumentTypeError(
+            f"must be between 1 and {MAX_SINCE_DAYS}; for a longer period use --limit N (number of sessions, 0 = all)")
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", default="~/.claude/projects", help="folder with one subfolder per project")
     ap.add_argument("--limit", type=int, default=20, help="most recent sessions to analyze (0 = all)")
     ap.add_argument("--project", help="only projects whose folder name or cwd contains this text")
-    ap.add_argument("--since-days", type=int, help="only sessions modified in the last N days")
+    ap.add_argument("--since-days", type=days_arg, metavar="N",
+                    help=f"only sessions modified in the last N days (1 to {MAX_SINCE_DAYS}); combine with --limit to cap the count")
     ap.add_argument("--out", default=f"{DEFAULT_DIR}/summary.json",
                     help="summary file; the default folder ./prompt-insights/ is created and git-ignored")
+    ap.add_argument("--history-dir", metavar="DIR",
+                    help=f"where report snapshots are kept for the follow-up between runs; default: ${ENV_VAR} or "
+                         "~/.claude/prompt-insights/history (one folder for all projects)")
     ap.add_argument("--labels", help="JSON file {session_id: task_type} to override heuristic task types")
     ap.add_argument("--prices", help="optional JSON {model-substring: {input, output, cache_read, cache_write, cache_write_1h}} "
                                      "in USD per 1M tokens; overrides the built-in list prices (pricing.py) for matching models")
@@ -1452,7 +1467,10 @@ def main():
     # compare with the previous report, if one was saved in history/
     out = Path(a.out)
     newest = max((s["_start"] for s in sessions if s["_start"]), default=None)
-    prev = find_previous(out.parent, newest)
+    history_dir = resolve_history_dir(a.history_dir)
+    hist_note = ensure_output_dir(history_dir)
+    migrated = migrate_legacy(out.parent, history_dir)
+    prev = find_previous(history_dir, newest, a.project)
     fu = None
     if prev:
         hooks_text = "\n".join(h["command"] for st in settings for h in st.get("hooks", []))
@@ -1514,6 +1532,10 @@ def main():
             "sessions_analyzed": len(sessions),
             "date_range": [min(starts)[:10], max(starts)[:10]] if starts else None,
             "filters": {"project": a.project, "since_days": a.since_days, "limit": a.limit},
+            "sessions_in_filter": len(sel_total),
+            "sessions_self_excluded": len(self_runs),
+            "max_since_days": MAX_SINCE_DAYS,
+            "history_dir": tilde(str(history_dir)),
             "task_labels": {"manual": sum(1 for s in sessions if s["task_type_source"] == "manual"),
                             "heuristic": sum(1 for s in sessions if s["task_type_source"] == "heuristic")},
             "claude_code_versions": dict(Counter(s["claude_code_version"] for s in sessions if s["claude_code_version"])),
@@ -1559,6 +1581,8 @@ def main():
     print(f"Estimated cost at API list prices: ${c['total_usd']} (subagents ${c['subagent_usd']}). "
           "An estimate from the public price list, not your actual cost.")
     print(f"Agent-file edit events: {agg['agent_file_edit_count']} | agent files found: {len(inventory)} | settings files: {len(settings)}")
+    print(f"History folder: {tilde(str(history_dir))} ({hist_note})"
+          + (f"; copied {migrated} snapshot(s) from {out.parent / 'history'}" if migrated else ""))
     if fu:
         print(f"Follow-up: previous report {fu['previous_report']['generated_at']}, {fu['sessions_since']} session(s) since")
     for w in warnings:

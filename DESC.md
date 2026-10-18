@@ -22,7 +22,7 @@ Everything runs locally. Secrets are redacted before analysis, and nothing leave
 ### What gets produced
 
 One run writes a small set of files to `./prompt-insights/` in the folder Claude Code runs from. The
-main result is **`claude-prompt-insights.html`**, a single self-contained report. The other files are
+main result is **`claude-prompt-insights-<timestamp>.html`**, a single self-contained report. The other files are
 the steps that lead to it, and you can inspect them:
 
 | File | What it holds |
@@ -31,7 +31,7 @@ the steps that lead to it, and you can inspect them:
 | `labels.todo.json` | A keyword guess of each session's task type (feature, bug fix, review, chore and so on) |
 | `labels.json` | The same labels after Claude has corrected them by reading what each session was really about |
 | `insights.json` | Claude's findings: scores, weaknesses with rewrites, techniques, agent-file verdicts, model advice, templates and the action plan |
-| `claude-prompt-insights.html` | The report you open in a browser |
+| `claude-prompt-insights-<timestamp>.html` | The report you open in a browser (a new file per run; a copy is kept with the snapshot in `~/.claude/prompt-insights/history/`) |
 | `.gitignore` | Keeps the whole folder out of git, because the report quotes your own sessions |
 
 ### How the report is made

@@ -23,33 +23,43 @@ uses well belongs under strengths, not here.
 
 ## RPI: Research, Plan, Implement
 
-Three phases with a hand-off between each. The point is to put your judgment where it is cheapest:
-a wrong research finding or a wrong plan costs a minute to fix; wrong code costs an hour.
+Three phases, each in its own session, each ending in a file. The point is to put your judgment where
+it is cheapest: a wrong research finding or a wrong plan costs a minute to fix; wrong code costs an
+hour. Adapted from the goose RPI tutorial (https://goose-docs.ai/docs/tutorials/rpi/), which reports a
+10-phase, 32-file removal done in about an hour (9 min research, 4 min plan, 39 min implement) that
+the author estimated at several hours by hand.
 
-1. **Research** (read-only). Ask for how the relevant code works today, which files matter, and
-   what could break. Output goes to a file, for example `research.md`. No edits.
-2. **Plan**. From `research.md`, a numbered plan: files to change, the order, how each step is
-   checked. You review and edit it. Plan mode or "do not edit yet" enforces the gate.
-3. **Implement**. In a fresh context (`/clear`, then point at `plan.md`), execute step by step and
-   run the checks the plan names. Stop and report if reality differs from the plan.
+Principles (from the tutorial, restated for Claude Code):
+- **One goal per session.** `/clear` between phases. The file is the hand-off, not the chat.
+- **Review at the two cheap gates**: after Research (is it accurate and about the right thing?) and
+  after Plan (would you approve this in a code review?). Not after Implement alone.
+- **Iterate, do not restart.** A plan that is slightly off is edited in place, researching only what
+  the feedback needs.
+- **The plan is the memory.** Checkboxes in the plan file let work resume after compaction or a new session.
+- **Implementation should feel mechanical.** If it feels creative, the plan is missing something.
 
-Skeleton prompts:
+| Phase | Rule | Produces | You check |
+|---|---|---|---|
+| 1 Research | Read only. Document what exists. No opinions, no critique, no plan. Parallel subagents: locate files, analyze code, find similar patterns. Every claim as `path:line`. | `thoughts/research/<date>-<topic>.md` (summary, flow, references, patterns, tests, open questions) | Accurate? Right topic? Too broad: rerun narrower. |
+| 2 Plan | No code. Ask clarifying questions, give options where several approaches fit, wait for answers. Phases in dependency order. | `thoughts/plans/<date>-<topic>.md` (scope, phases, exact files, checkboxes, automated and manual success criteria, risks) | Read it like a review. Wrong: iterate. |
+| 3 Implement | Read the whole plan, phases in order, verify after each, tick checkboxes, stop and report on mismatch. | The change plus a ticked plan | Manual checks and the diff. |
 
-```
-Research: <area>. Read <paths>. Write research.md with: how it works today, files involved,
-risks, open questions. Do not change any code.
-```
-```
-Plan: using research.md, write plan.md for <change>. Numbered steps, each with the file, the
-edit, and how to verify it. Stop after writing the plan so I can review.
-```
-```
-Implement plan.md. Do steps in order, run the verification of each step, and stop at the first
-failure to report what you found.
-```
+The dedicated prompts for each phase and for iterating the plan live in
+`assets/technique-playbooks.json`; `build_report.py` renders them in the Techniques tab whenever
+`rpi` is recommended (and in a collapsed section otherwise). So for `rpi`:
+- keep `steps` to 3 to 5 lines and say why it fits (session id, number);
+- do not repeat the generic prompts in `example_prompt`; it is not shown when a playbook exists;
+- if the user's sessions give you real terms (paths, features, test commands), pass `phases`:
+  `[{"id": "research", "prompt": "..."}, {"id": "plan", "prompt": "..."}, {"id": "implement", "prompt": "..."}]`.
+  Keep the structure of the shipped prompt (read-only rule, output file with sections, stop
+  conditions) and replace the `<placeholders>` with their real topic, files and checks.
 
-Use it when: unfamiliar code, changes across several files, or work that will outlive one sitting.
-Skip it when: the change is one file and you can describe the diff in a sentence.
+Use it when: unfamiliar code, changes across several files (refactors, migrations, upgrades), or work
+that will outlive one sitting. Skip it when: the change is one file and you can describe the diff in a
+sentence.
+
+Common mistakes: research that drifts into suggestions; a topic too broad (catch it in the first
+minutes); all three phases in one session; approving a plan unread; restarting instead of iterating.
 
 ## Others (one line each, expand to fit the user)
 

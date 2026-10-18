@@ -15,9 +15,9 @@ apply in five minutes at the top of the first tab.
 
 | Tab | What is in it |
 |---|---|
-| **Overview** | The quick win (with a paste-ready block), what changed since your last report, the highest-impact change, headline findings, key numbers |
+| **Overview** | How many sessions the report covers and how to include more, the quick win (with a paste-ready block), what changed since your last report, the highest-impact change, headline findings, key numbers |
 | **Prompts** | Prompt-quality scores, the recurring weaknesses with before/after rewrites of your real prompts (quotes are checked against the transcript), strengths, a best-vs-worst comparison, how sessions ended (passing check, commit, PR) |
-| **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement), plan mode, staged delivery, verify loops, interview-first, hooks and more. Also up to 3 ready-to-send prompts from the [official Claude Code prompt library](https://code.claude.com/docs/en/prompt-library), filled in with your own project terms |
+| **Techniques** | 1 to 3 techniques matched to your habits, with example prompts: RPI (research, plan, implement, with a dedicated prompt for each phase plus one to iterate the plan, adapted from the [goose RPI tutorial](https://goose-docs.ai/docs/tutorials/rpi/)), plan mode, staged delivery, verify loops, interview-first, hooks and more. Also up to 3 ready-to-send prompts from the [official Claude Code prompt library](https://code.claude.com/docs/en/prompt-library), filled in with your own project terms |
 | **Agent files** | Health of CLAUDE.md, AGENTS.md, rules, skills, commands and subagents; what exists on disk; instructions you repeat across sessions; a `/doctor prompt-audit` hint when files look stale |
 | **Hooks & permissions** | Hooks and allow/ask/deny rules in your settings files, tool calls you approved or rejected by hand, rules worth turning into hooks, allow rules worth adding |
 | **Models & cost** | Messages and tokens per model and effort level, estimated cost by model, task type, subagent type and workflow, the most expensive sessions and why, context-window use (peak size, startup size, cache restarts after idle, missing /clear and /compact, with fixes; assumes a subscription's 1-hour cache), task-type vs model matrix, models that look too heavy or too light |
@@ -87,8 +87,8 @@ relevant turns, write its findings, and build the report.
 When it finishes, open the file it names:
 
 ```bash
-open prompt-insights/claude-prompt-insights.html      # macOS
-xdg-open prompt-insights/claude-prompt-insights.html  # Linux
+open prompt-insights/claude-prompt-insights-<timestamp>.html      # macOS
+xdg-open prompt-insights/claude-prompt-insights-<timestamp>.html  # Linux
 ```
 
 ### Where the files go
@@ -101,10 +101,20 @@ prompt-insights/
   labels.todo.json                 task-type guesses to review
   labels.json                      your corrected task types
   insights.json                    Claude's findings
-  claude-prompt-insights.html      the report
-  history/<timestamp>/             a copy of summary.json and insights.json per report, for the next follow-up
+  claude-prompt-insights-<UTC timestamp>.html   the report (a new file per run)
   .gitignore                       ignores everything in this folder
 ```
+
+Snapshots for the follow-up live outside the project, in one folder for all projects:
+
+```
+~/.claude/prompt-insights/history/<UTC timestamp>/
+  summary.json  insights.json  claude-prompt-insights.html
+```
+
+Change the folder with `--history-dir DIR` (on both scripts) or the `PROMPT_INSIGHTS_HISTORY`
+environment variable; the option wins over the variable. Snapshots from an older
+`./prompt-insights/history/` are copied to the new folder on the next run.
 
 ### Cost is an estimate, not your bill
 
@@ -120,7 +130,11 @@ with each other. To price with your own rates, pass `--prices prices.json`.
 
 ### Follow-up between runs
 
-Each report build saves a copy of its data in `prompt-insights/history/`. The next run compares the
+Each report build saves a copy of its data and the report in `~/.claude/prompt-insights/history/<timestamp>/`.
+A run is compared with the newest earlier snapshot made with the same `--project` filter (no filter
+compares with no filter), so a one-project report is never measured against an all-projects one.
+Because the snapshots are outside the project, they survive `git clean` and a fresh clone and can be
+kept as long as you like, which lets you follow your habits over time. The next run compares the
 sessions started since then with the sessions the previous report was built from (prompt habits,
 corrections, sessions ending on a passing check, estimated cost per session) and checks whether the
 lines it proposed for CLAUDE.md, rules and hooks are now in your files.
@@ -137,15 +151,16 @@ The scripts can also be run by hand from your project folder:
 ```bash
 python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --limit 30
 python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --project my-app --limit 0
-python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --since-days 14 --exclude-session 1a2b3c4d
+python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --since-days 7 --exclude-session 1a2b3c4d
 python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --show <session-id> --turns 0:6
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--limit N` | Most recent N sessions (default 20, `0` = all) |
+| `--limit N` | Most recent N sessions (default 20, `0` = all). The Overview tab shows how many were included |
 | `--project TEXT` | Only sessions whose project folder contains the text; also narrows the agent-file check to that project |
-| `--since-days N` | Only sessions from the last N days |
+| `--since-days N` | Only sessions from the last N days, N from 1 to 7. Combine with `--limit` to cap the count; use `--limit` alone for a longer period |
+| `--history-dir DIR` | Where snapshots are kept (default `$PROMPT_INSIGHTS_HISTORY`, else `~/.claude/prompt-insights/history`) |
 | `--exclude-session ID` | Skip a session (repeatable) |
 | `--prices prices.json` | Your own prices (USD per 1M tokens, keyed by a model-name substring: `input`, `output`, `cache_read`, `cache_write`, `cache_write_1h`); overrides the built-in list prices for matching models |
 | `--no-subagents` | Skip subagent and workflow transcripts (faster; their models, tokens and cost are then missing) |
@@ -154,7 +169,7 @@ python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --show <sessi
 
 ## Privacy and safety
 
-- **Read-only** on `~/.claude` and on your repositories. The only things it writes are the files in `./prompt-insights/` and one line in `.gitignore`.
+- **Read-only** on `~/.claude` and on your repositories. The only things it writes are the files in `./prompt-insights/`, the snapshots in `~/.claude/prompt-insights/history/` (or your chosen history folder) and one line in `.gitignore`.
 - **Settings files:** only the `hooks` and `permissions` keys are read; environment variables and other settings never enter the summary.
 - **Redaction in code** removes API keys, tokens, passwords, emails, IP addresses and long blobs before Claude sees any text, and again when the report is built. Skim `summary.json` before sharing anything.
 - **Only your own typed prompts count.** Task notifications, messages from other sessions and injected reminders are excluded. Arguments of skill slash commands count, because you typed them.

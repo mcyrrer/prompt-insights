@@ -1,13 +1,18 @@
 """Keep a copy of every report and compare the next run with it.
 
-build_report.py copies summary.json and insights.json into prompt-insights/history/<timestamp>/.
-The next analyze_sessions.py run picks the newest snapshot that is older than the newest analysed
-session, then measures the sessions started since that report against the sessions the report was
-built from, and checks whether the lines it proposed for agent files are on disk now.
+build_report.py copies summary.json, insights.json and the HTML report into
+<history dir>/<timestamp>/. The history dir is, in order of precedence, --history-dir, the
+PROMPT_INSIGHTS_HISTORY environment variable, or ~/.claude/prompt-insights/history. It is one flat
+folder for all projects; each snapshot records its --project filter and the next run only compares
+with a snapshot of the same scope.
+The next analyze_sessions.py run picks the newest such snapshot that is older than the newest
+analysed session, then measures the sessions started since that report against the sessions the
+report was built from, and checks whether the lines it proposed for agent files are on disk now.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -15,7 +20,9 @@ from pathlib import Path
 
 from redact import truncate
 
-HISTORY_DIR = "history"
+HISTORY_DIR = "history"  # name of the legacy per-project folder inside prompt-insights/
+ENV_VAR = "PROMPT_INSIGHTS_HISTORY"
+DEFAULT_HISTORY = "~/.claude/prompt-insights/history"
 
 
 def _dt(s):
@@ -26,29 +33,62 @@ def _dt(s):
         return None
 
 
-def snapshot(out_dir: Path, summary_path: Path, insights_path: Path) -> Path:
+def resolve_history_dir(cli=None) -> Path:
+    """--history-dir beats the environment variable, which beats the user-level default."""
+    return Path(cli or os.environ.get(ENV_VAR) or DEFAULT_HISTORY).expanduser().resolve()
+
+
+def _scope(project) -> str:
+    return (project or "").strip().lower()
+
+
+def snapshot(history_dir: Path, summary_path: Path, insights_path: Path, html_path=None) -> Path:
     S = json.loads(summary_path.read_text())
     gen = (S.get("meta") or {}).get("generated_at") or datetime.now(timezone.utc).isoformat()
-    stamp = re.sub(r"[^0-9T]", "", gen[:19])
-    d = out_dir / HISTORY_DIR / stamp
+    d = history_dir / stamp_of(gen)
     d.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(summary_path, d / "summary.json")
     shutil.copyfile(insights_path, d / "insights.json")
+    if html_path and Path(html_path).is_file():
+        shutil.copyfile(html_path, d / "claude-prompt-insights.html")
     return d
 
 
-def find_previous(out_dir: Path, newest_session_start):
-    """Newest snapshot generated before the newest analysed session started; None if there is none."""
-    root = out_dir / HISTORY_DIR
-    if not root.is_dir() or newest_session_start is None:
+def stamp_of(generated_at) -> str:
+    """Sortable UTC timestamp such as 20261018T120301 for file and folder names."""
+    gen = _dt(generated_at) or datetime.now(timezone.utc)
+    return gen.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+
+def migrate_legacy(legacy_out_dir: Path, history_dir: Path) -> int:
+    """Copy snapshots from an older ./prompt-insights/history/ into history_dir (never overwrites)."""
+    legacy = legacy_out_dir / HISTORY_DIR
+    if not legacy.is_dir() or legacy.resolve() == history_dir.resolve():
+        return 0
+    n = 0
+    for d in sorted(p for p in legacy.iterdir() if p.is_dir()):
+        dest = history_dir / d.name
+        if dest.exists():
+            continue
+        shutil.copytree(d, dest)
+        n += 1
+    return n
+
+
+def find_previous(history_dir: Path, newest_session_start, project=None):
+    """Newest snapshot of the same scope generated before the newest analysed session started; None if none."""
+    if not history_dir.is_dir() or newest_session_start is None:
         return None
-    for d in sorted((p for p in root.iterdir() if p.is_dir()), reverse=True):
+    for d in sorted((p for p in history_dir.iterdir() if p.is_dir()), reverse=True):
         try:
             S = json.loads((d / "summary.json").read_text())
             I = json.loads((d / "insights.json").read_text()) if (d / "insights.json").is_file() else {}
         except Exception:
             continue
-        gen = _dt((S.get("meta") or {}).get("generated_at"))
+        M = S.get("meta") or {}
+        if _scope((M.get("filters") or {}).get("project")) != _scope(project):
+            continue
+        gen = _dt(M.get("generated_at"))
         if gen and gen < newest_session_start:
             return d, S, I, gen
     return None
