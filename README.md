@@ -157,9 +157,9 @@ python3 .claude/skills/prompt-insights/scripts/analyze_sessions.py --show <sessi
 
 | Flag | Meaning |
 |---|---|
-| `--limit N` | Most recent N sessions (default 20, `0` = all). The Method tab shows how many were included |
+| `--limit N` | Most recent N sessions (`0` = all; on its own it replaces the default 7-day window). The Method tab shows how many were included |
 | `--project TEXT` | Only sessions whose project folder contains the text; also narrows the agent-file check to that project |
-| `--since-days N` | Only sessions from the last N days, N from 1 to 7. Combine with `--limit` to cap the count; use `--limit` alone for a longer period |
+| `--since-days N` | Only sessions from the last N days (any N). Default: 7 days when neither this nor `--limit` is given. Combine with `--limit` to cap the count |
 | `--history-dir DIR` | Where snapshots are kept (default `$PROMPT_INSIGHTS_HISTORY`, else `~/.claude/prompt-insights/history`) |
 | `--exclude-session ID` | Skip a session (repeatable) |
 | `--prices prices.json` | Your own prices (USD per 1M tokens, keyed by a model-name substring: `input`, `output`, `cache_read`, `cache_write`, `cache_write_1h`); overrides the built-in list prices for matching models |

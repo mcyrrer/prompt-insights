@@ -1341,24 +1341,24 @@ def mode_show(path: Path, extra, max_chars: int, max_lines: int, turns):
     return 0
 
 
-MAX_SINCE_DAYS = 7
+DEFAULT_SINCE_DAYS = 7
 
 
 def days_arg(v):
     n = int(v)
-    if not 1 <= n <= MAX_SINCE_DAYS:
-        raise argparse.ArgumentTypeError(
-            f"must be between 1 and {MAX_SINCE_DAYS}; for a longer period use --limit N (number of sessions, 0 = all)")
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
     return n
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", default="~/.claude/projects", help="folder with one subfolder per project")
-    ap.add_argument("--limit", type=int, default=20, help="most recent sessions to analyze (0 = all)")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="most recent sessions to analyze (0 = all); on its own it replaces the default time window")
     ap.add_argument("--project", help="only projects whose folder name or cwd contains this text")
     ap.add_argument("--since-days", type=days_arg, metavar="N",
-                    help=f"only sessions modified in the last N days (1 to {MAX_SINCE_DAYS}); combine with --limit to cap the count")
+                    help=f"only sessions modified in the last N days (default {DEFAULT_SINCE_DAYS} when neither --since-days nor --limit is given); combine with --limit to cap the count")
     ap.add_argument("--out", default=f"{DEFAULT_DIR}/summary.json",
                     help="summary file; the default folder ./prompt-insights/ is created and git-ignored")
     ap.add_argument("--history-dir", metavar="DIR",
@@ -1380,6 +1380,10 @@ def main():
     ap.add_argument("--include-self", action="store_true", help="keep sessions that ran the prompt-insights skill")
     ap.add_argument("--force", action="store_true", help="write output even if sanity checks fail")
     a = ap.parse_args()
+    if a.since_days is None and a.limit is None:
+        a.since_days = DEFAULT_SINCE_DAYS  # no selection given: last 7 days
+    if a.limit is None:
+        a.limit = 0  # a time window already bounds the set
 
     root = Path(a.root).expanduser()
     if not root.is_dir():
@@ -1544,7 +1548,7 @@ def main():
             "filters": {"project": a.project, "since_days": a.since_days, "limit": a.limit},
             "sessions_in_filter": len(sel_total),
             "sessions_self_excluded": len(self_runs),
-            "max_since_days": MAX_SINCE_DAYS,
+            "default_since_days": DEFAULT_SINCE_DAYS,
             "history_dir": tilde(str(history_dir)),
             "task_labels": {"manual": sum(1 for s in sessions if s["task_type_source"] == "manual"),
                             "heuristic": sum(1 for s in sessions if s["task_type_source"] == "heuristic")},

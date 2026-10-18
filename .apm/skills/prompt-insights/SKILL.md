@@ -53,17 +53,17 @@ newest earlier snapshot of the same project filter. Snapshots found in an older
    continuing with zeros. Pass the same `--project` / `--since-days` filters you will use in step 2;
    without them it inspects the newest sessions of any project.
 
-2. **Build the summary.** Defaults to the 20 most recent sessions.
+2. **Build the summary.** Defaults to sessions from the last 7 days.
    ```
-   python3 SKILL_DIR/scripts/analyze_sessions.py --limit 20
+   python3 SKILL_DIR/scripts/analyze_sessions.py
    ```
    This writes `prompt-insights/summary.json` and `prompt-insights/labels.todo.json`. It also reads
    each session's subagent and workflow-agent transcripts (`<session-id>/subagents/`), the hooks and
    permission rules in settings files (only those two keys), and, when an earlier report was saved in
    the history folder, compares this run with it (`followup`).
    Flags: `--project TEXT` (one project; also narrows the agent-file inventory to that project),
-   `--since-days N` (1 to 7 only; for a longer period use `--limit`), `--limit N` (the N most recent
-   sessions; `--limit 0` = all; `--limit` counts sessions kept after exclusions),
+   `--since-days N` (any N; 7 when neither this nor `--limit` is given), `--limit N` (the N most recent
+   sessions, no time window unless `--since-days` is also given; `--limit 0` = all; `--limit` counts sessions kept after exclusions),
    `--exclude-session ID` (repeatable: use it for earlier look-alike analysis runs that did not
    invoke this skill and would add noise), `--prices prices.json` (overrides the built-in list prices
    for matching models), `--no-subagents` (faster, but subagent models and cost go missing),
@@ -198,7 +198,7 @@ newest earlier snapshot of the same project filter. Snapshots found in an older
    about missing sections. Open the file named in the builder's output (`open <file>` on macOS).
    The Method tab states how many sessions the report covers and how to include more or fewer.
    When the user asks for "my last N sessions" use `--limit N`; for "the last N days" use
-   `--since-days N` (maximum 7; offer `--limit` beyond that). Do not change those flags unasked.
+   `--since-days N` (any N, e.g. 30 for a month). With neither, the last 7 days are used. Do not change those flags unasked.
    Tabs: Overview (quick win, since last report, headlines, numbers), Prompts (scores, weaknesses,
    strengths, best vs worst, how sessions ended), Techniques, Agent files, Hooks & permissions,
    Models & cost (effort, estimated cost, subagents, workflows), Templates, Action plan (with doc

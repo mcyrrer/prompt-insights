@@ -119,6 +119,7 @@ button.copy:hover{background:var(--code)}
 .chg.good{border-top-color:var(--good)}.chg.bad{border-top-color:var(--bad)}.chg.flat{border-top-color:var(--line)}
 .chg-l{font-size:13px;color:var(--muted);min-height:2.6em}.chg-v{font:600 28px/1.2 var(--serif);margin:4px 0}.chg-d{font-size:13px;color:var(--muted)}
 .chg.good .chg-a,.chg.good .chg-d{color:var(--good)}.chg.bad .chg-a,.chg.bad .chg-d{color:var(--bad)}
+.dl{font-size:12px;font-weight:600;margin-left:4px;white-space:nowrap}.dl.good{color:var(--good)}.dl.bad{color:var(--bad)}
 .tag.good{color:var(--good);border-color:var(--good)}.tag.bad{color:var(--bad);border-color:var(--bad)}.tag.warn{color:var(--warn);border-color:var(--warn)}
 .ba{display:grid;gap:12px;grid-template-columns:1fr 1fr;margin:10px 0}@media(max-width:700px){.ba{grid-template-columns:1fr}}
 .ba>div{border-radius:6px;padding:10px 12px}
@@ -478,6 +479,16 @@ def folder_label(f) -> str:
     return "~/.claude/" if scope == "global" else ("Plugins (managed)" if scope == "plugin" else scope)
 
 
+def delta(now, before, up_is_good=True) -> str:
+    """'+2' / '-1' next to a number: green when it moved the better way, red when worse; nothing if unchanged or unknown.
+    up_is_good=None: neutral grey."""
+    if before is None or now == before:
+        return ""
+    d = now - before
+    cls = "" if up_is_good is None else ("good" if (d > 0) == up_is_good else "bad")
+    return f' <span class="dl {cls}" title="was {before} at the last scan">{d:+d}</span>'
+
+
 def file_health_by_folder(S, find) -> str:
     folders = {}
     for f in S["agent_files"]:
@@ -485,12 +496,21 @@ def file_health_by_folder(S, find) -> str:
         counts[effective_status(f, find)] += 1
     if not folders:
         return na("No agent files found")
+    prev = None
+    pf = (S.get("followup") or {}).get("previous_files")
+    if pf is not None:
+        prev = {}
+        for f in pf:
+            counts = prev.setdefault(folder_label(f), dict.fromkeys(FILE_STATUSES, 0))
+            counts[effective_status(f, {f.get("path"): {"status": f.get("status")}})] += 1
     order = sorted(folders, key=lambda k: (k != "~/.claude/", k))
     rows = []
     for k in order:
         c = folders[k]
-        rows.append([k, sum(c.values())] + [c[st] for st in FILE_STATUSES])
-    return table(["Working folder", "Files"] + [st.capitalize() for st in FILE_STATUSES], rows)
+        p = prev.get(k, dict.fromkeys(FILE_STATUSES, 0)) if prev is not None else None
+        rows.append([esc(k), f"{sum(c.values())}" + (delta(sum(c.values()), sum(p.values()), None) if p else "")]
+                    + [f"{c[st]}" + (delta(c[st], p[st], st == "healthy") if p else "") for st in FILE_STATUSES])
+    return table(["Working folder", "Files"] + [st.capitalize() for st in FILE_STATUSES], rows, raw_cols=range(2 + len(FILE_STATUSES)))
 
 
 def redact_tree(x, extra):
@@ -627,7 +647,6 @@ def sample_html(S) -> str:
     F = M.get("filters") or {}
     n = M["sessions_analyzed"]
     avail = M.get("sessions_in_filter") or M["sessions_available_total"]
-    cap = M.get("max_since_days", 7)
     what = f"{n} session{'s' if n != 1 else ''}"
     if M.get("date_range"):
         what += f' from {M["date_range"][0]} to {M["date_range"][1]}'
@@ -648,11 +667,10 @@ def sample_html(S) -> str:
            "<p><b>Change the sample.</b> Ask Claude Code in plain language, or pass a flag to <code>analyze_sessions.py</code> and build the report again.</p>"
            + '<ul class="prose">' + "".join(f"<li>{x}</li>" for x in [
                   "More or fewer sessions: <code>--limit N</code> (<code>--limit 0</code> = every session). Ask for example: \u201cRun prompt insights on my last 40 sessions.\u201d",
-                  f"A time window: <code>--since-days N</code>, N from 1 to {int(cap)}. Ask for example: \u201cRun prompt insights on the last 7 days.\u201d "
-                  "For a longer period use <code>--limit</code>.",
+                  "A time window: <code>--since-days N</code> (default 7 days; any N works). Ask for example: \u201cRun prompt insights on the last 30 days.\u201d",
                   "One project only: <code>--project TEXT</code>. The follow-up then compares with earlier reports of the same project."]) + "</ul>"
            + copybox("smp1", "Run prompt insights on my last 40 sessions", "Ask Claude Code")
-           + copybox("smp2", "Run prompt insights on the last 7 days", "Ask Claude Code") + "</div>")
+           + copybox("smp2", "Run prompt insights on the last 30 days", "Ask Claude Code") + "</div>")
     return out
 
 
@@ -911,12 +929,31 @@ def p_agent_files(S, I):
                  + source_links(["prompt-audit", "memory"]) + "</div>")
     roots = S.get("project_roots") or []
     if roots:
-        yn = lambda b: "yes" if b else "no"
+        prev_roots = {r["project"]: r for r in (S.get("followup") or {}).get("previous_roots") or []}
+
+        def yn(r, key, keys=None):
+            now = any(r[k] for k in (keys or [key]))
+            p = prev_roots.get(r["project"])
+            was = any(p.get(k) for k in (keys or [key])) if p else None
+            tag = "" if was is None or was == now else (' <span class="dl good">new</span>' if now else ' <span class="dl bad">gone</span>')
+            return ("yes" if now else "no") + tag
+
+        def num(r, key):
+            p = prev_roots.get(r["project"])
+            return f'{r[key]}' + (delta(r[key], p.get(key, 0)) if p else "")
+
+        def mem(r):
+            names = f' ({esc(", ".join(r.get("memory_note_names", [])[:4]))})' if r.get("memory_note_names") else ""
+            return num(r, "memory_files") + names
+
         body += "<h3>Checked on disk</h3>" + table(
             ["Project", "Exists", "CLAUDE.md", "AGENTS.md", "Rules", "Subagents", "Skills", "Memory notes", "Sessions"],
-            [[r["project"], yn(r["exists"]), yn(r["claude_md"] or r["claude_local_md"]), yn(r["agents_md"]), r["rules"],
-              r["agents"], r["skills"], f'{r["memory_files"]}' + (f' ({", ".join(r.get("memory_note_names", [])[:4])})' if r.get("memory_note_names") else ""),
-              r["sessions"]] for r in roots])
+            [[esc(r["project"]), yn(r, "exists"), yn(r, None, ["claude_md", "claude_local_md"]), yn(r, "agents_md"), num(r, "rules"),
+              num(r, "agents"), num(r, "skills"), mem(r), f'{r["sessions"]}'] for r in roots], raw_cols=range(9))
+        if prev_roots:
+            body += '<p class="muted" style="font-size:13px">+/- compares with the last report\'s scan. Green: more files or notes. Red: fewer.</p>'
+        elif S.get("followup") is None:
+            body += '<p class="muted" style="font-size:13px">Changes since the last scan show here once a previous report exists.</p>'
     body += "<h3>File health</h3>" + file_health_by_folder(S, find)
     rows = []
     for f in S["agent_files"]:

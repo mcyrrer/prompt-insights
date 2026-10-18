@@ -245,6 +245,12 @@ def followup(prev, sessions_now, files, hooks_text) -> dict:
         "previous_report": {"generated_at": M.get("generated_at"), "sessions_analyzed": M.get("sessions_analyzed"),
                             "date_range": M.get("date_range"), "quick_win": (I_prev.get("quick_win") or {}).get("title"),
                             "quick_win_metric": qmetric, "snapshot": d.name},
+        "previous_roots": S_prev.get("project_roots") or [],
+        "previous_files": [{"path": f.get("path"), "scope": f.get("scope"), "hints": f.get("hints") or [],
+                            "possibly_dead_references": f.get("possibly_dead_references") or [],
+                            "status": next((x.get("status") for x in (I_prev.get("agent_files") or {}).get("findings", [])
+                                            if x.get("path") == f.get("path")), None)}
+                           for f in S_prev.get("agent_files") or []],
         "sessions_since": len(after),
         "sessions_since_ids": [s["id"] for s in after][:30],
         "metrics": rows,
